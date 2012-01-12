@@ -181,11 +181,42 @@ function sync_postgis_cron_queue_info() {
  */
 function sync_postgis_queue_process_item($item) {
   // Call whatever function will sync this item.
-  if (isset($item['nid'])) {
+  if (isset($item['nid']) && is_numeric($item['nid'])) {
     // We just need to call node_save on the node in order to force it to get
     // syncd to the PostGIS db.
     $node = node_load($item['nid']);
-    node_save($node);
-    drupal_set_message(t('Processed %title', array('%title' => $item['title'])));
+    if ($node->nid && !$node->is_new) {
+      node_save($node);
+      drupal_set_message(t('Processed %title', array('%title' => $item['title'])));
+    }
   }
+}
+
+/**
+ * Implements hook_requirements().
+ */
+function sync_postgis_requirements($phase) {
+  $requirements = array(
+    'sync_postgis' => array(
+      'title' => t('PostGIS Database'),
+    )
+  );
+
+  if ($phase == 'runtime') {
+    try {
+      if ($db = Database::getConnection('default', SYNC_POSTGIS_DB)) {
+	$severity = REQUIREMENT_OK;
+      }
+      else {
+	$severity = REQUIREMENT_ERROR;
+      }
+    }
+    catch (Exception $e) {
+      $severity = REQUIREMENT_ERROR;
+    }
+    $requirements['sync_postgis']['severity'] = $severity;
+    $requirements['sync_postgis']['value'] = $severity == REQUIREMENT_OK ? t('Successfully connected to the PostGis Database') : t('Could not connect to the PostGIS database. Make sure it has been added to your settings.php');
+  }
+
+  return $requirements;
 }
