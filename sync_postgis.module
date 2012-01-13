@@ -42,14 +42,16 @@ function sync_postgis_menu() {
  * Implements hook_node_presave().
  */
 function sync_postgis_node_presave($node) {
-  $fields = sync_postgis_get_geofields($node->type);
-  if (!empty($fields)) {
-    db_set_active(SYNC_POSTGIS_DB);
-    $node->sync_postgis = array();
-    foreach ($fields as $field_name) {
-      sync_postgis_sync($node, $field_name);
+  if (sync_postgis_test_db_connection()) {
+    $fields = sync_postgis_get_geofields($node->type);
+    if (!empty($fields)) {
+      db_set_active(SYNC_POSTGIS_DB);
+      $node->sync_postgis = array();
+      foreach ($fields as $field_name) {
+        sync_postgis_sync($node, $field_name);
+      }
+      db_set_active();
     }
-    db_set_active();
   }
 }
 
@@ -127,18 +129,20 @@ function sync_postgis_sync(&$node, $field_name) {
  * Implements hook_node_insert().
  */
 function sync_postgis_node_insert($node) {
-  // Update the nid column in the postgis table.
-  if ($node->sync_postgis && !empty($node->sync_postgis)) {
-    db_set_active(SYNC_POSTGIS_DB);
-    $ids = array();
-    foreach($node->sync_postgis as $field_name => $values) {
-      $ids = array_merge($ids, $values);
+  if (sync_postgis_test_db_connection()) {
+    // Update the nid column in the postgis table.
+    if ($node->sync_postgis && !empty($node->sync_postgis)) {
+      db_set_active(SYNC_POSTGIS_DB);
+      $ids = array();
+      foreach($node->sync_postgis as $field_name => $values) {
+        $ids = array_merge($ids, $values);
+      }
+      // Update the record in postgis for this field value.
+      $pg_query = "UPDATE {pg_node} SET nid = :nid" .
+                  " WHERE id IN (" . implode(',', $ids) . ")";
+      db_query($pg_query, array(':nid' => $node->nid));
+      db_set_active();
     }
-    // Update the record in postgis for this field value.
-    $pg_query = "UPDATE {pg_node} SET nid = :nid" .
-		" WHERE id IN (" . implode(',', $ids) . ")";
-    db_query($pg_query, array(':nid' => $node->nid));
-    db_set_active();
   }
 }
 
