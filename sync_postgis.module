@@ -146,11 +146,18 @@ function sync_postgis_node_insert($node) {
  * Implements hook_node_delete().
  */
 function sync_postgis_node_delete($node) {
-  db_set_active(SYNC_POSTGIS_DB);
-  // Delete the node record from postgis.
-  $pg_query = "DELETE FROM {pg_node} WHERE nid = :nid";
-  db_query($pg_query, array(':nid' => $node->nid));
-  db_set_active();
+  if (sync_postgis_test_db_connection()) {
+    db_set_active(SYNC_POSTGIS_DB);
+    // Delete the node record from the postgis table, if it exists.
+    $pg_query = "DELETE FROM {pg_node} WHERE nid = :nid";
+    try {
+      db_query($pg_query, array(':nid' => $node->nid));
+    }
+    catch (Exception $e) {
+      watchdog_exception('sync_postgis', $e);
+    }
+    db_set_active();
+  }
 }
 
 /**
@@ -196,27 +203,37 @@ function sync_postgis_queue_process_item($item) {
  * Implements hook_requirements().
  */
 function sync_postgis_requirements($phase) {
-  $requirements = array(
-    'sync_postgis' => array(
-      'title' => t('PostGIS Database'),
-    )
-  );
-
+  $requirements = array();
   if ($phase == 'runtime') {
-    try {
-      if ($db = Database::getConnection('default', SYNC_POSTGIS_DB)) {
-	$severity = REQUIREMENT_OK;
-      }
-      else {
-	$severity = REQUIREMENT_ERROR;
-      }
+    $requirements['sync_postgis'] = array(
+      'title' => t('PostGIS Database'),
+    );
+
+    if (sync_postgis_test_db_connection()) {
+      $requirements['sync_postgis']['severity'] = REQUIREMENT_OK;
+      $requirements['sync_postgis']['value'] = t('Successfully connected to the PostGis Database');
     }
-    catch (Exception $e) {
-      $severity = REQUIREMENT_ERROR;
+    else {
+      $requirements['sync_postgis']['severity'] = REQUIREMENT_ERROR;
+      $requirements['sync_postgis']['value'] = t('Could not connect to the PostGIS database. Make sure it has been added to your settings.php');
     }
-    $requirements['sync_postgis']['severity'] = $severity;
-    $requirements['sync_postgis']['value'] = $severity == REQUIREMENT_OK ? t('Successfully connected to the PostGis Database') : t('Could not connect to the PostGIS database. Make sure it has been added to your settings.php');
+
   }
 
   return $requirements;
+}
+
+/**
+ * Tests whether there's a postgis database set up that can be connected to.
+ */
+function sync_postgis_test_db_connection() {
+  try {
+    if ($db = Database::getConnection('default', SYNC_POSTGIS_DB)) {
+      return TRUE;
+    }
+  }
+  catch (Exception $e) {
+    return FALSE;
+  }
+  return FALSE;
 }
