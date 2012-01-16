@@ -114,11 +114,12 @@ function sync_postgis_sync(&$node, $field_name) {
       if ($pgid) {
 	$node->sync_postgis[$field_name][$delta] = $pgid;
       }
+      unset($existing[$delta]);
     }
   }
-  else if (!empty($existing)) {
-    // Delete existing records from the postgis db as the node no longer has
-    // values for this field.
+  if (!empty($existing)) {
+    // Delete remaining records from the postgis db as the node no longer has
+    // these values.
     foreach ($existing as $delta => $id) {
       db_query("DELETE from {pg_node} WHERE id = :id", array(':id' => $id));
     }
