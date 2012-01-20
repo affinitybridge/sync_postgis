@@ -138,10 +138,12 @@ function sync_postgis_node_insert($node) {
       foreach($node->sync_postgis as $field_name => $values) {
         $ids = array_merge($ids, $values);
       }
-      // Update the record in postgis for this field value.
-      $pg_query = "UPDATE {pg_node} SET nid = :nid" .
-                  " WHERE id IN (" . implode(',', $ids) . ")";
-      db_query($pg_query, array(':nid' => $node->nid));
+      if (!empty($ids)) {
+	// Update the record in postgis for this field value.
+	$pg_query = "UPDATE {pg_node} SET nid = :nid" .
+		    " WHERE id IN (" . implode(',', $ids) . ")";
+	db_query($pg_query, array(':nid' => $node->nid));
+      }
       db_set_active();
     }
   }
