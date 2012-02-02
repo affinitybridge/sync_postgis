@@ -120,6 +120,12 @@ function sync_postgis_setup_tables_form_submit($form, &$form_state) {
           'default' => 0,
           )
         ),
+        // Our nid column is a foreign key to the pg_node table but it is also
+        // the primary key. This is an usual set-up arising from the fact that
+        // we're creating one-to-one table relationships. The only reason we're
+        // doing it like this is to keep the content-type specific data in
+        // separate tables.
+        'primary key' => array('nid'),
         'foreign keys' => array(
           'node_nid' => array(
             'table' => 'pg_node', 

@@ -64,6 +64,40 @@ function sync_postgis_node_presave($node) {
   }
 }
 
+
+/**
+ * Implements hook_node_insert().
+ */
+function sync_postgis_node_insert($node) {
+  if (sync_postgis_test_db_connection()) {
+    // Update the nid column in the postgis table.
+    if ($node->sync_postgis && !empty($node->sync_postgis)) {
+      db_set_active(SYNC_POSTGIS_DB);
+      $ids = array();
+      foreach($node->sync_postgis as $field_name => $values) {
+        $ids = array_merge($ids, $values);
+      }
+      if (!empty($ids)) {
+	// Update the record in postgis for this field value.
+	$pg_query = "UPDATE {pg_node} SET nid = :nid" .
+		    " WHERE id IN (" . implode(',', $ids) . ")";
+	db_query($pg_query, array(':nid' => $node->nid));
+      }
+      db_set_active();
+    }
+    // Add the rest of the node data, stored in a separate table.
+    sync_postgis_update_node_table($node, TRUE);
+  }
+}
+
+
+/**
+ * Implements hook_node_update().
+ */
+function sync_postgis_node_update($node) {
+  // Update the rest of the node data, stored in a separate table.
+  sync_postgis_update_node_table($node, FALSE);
+}
 /**
  * Syncs a node to the node table in the postgis db.
  */
@@ -135,27 +169,49 @@ function sync_postgis_sync(&$node, $field_name) {
   }
 }
 
-/**
- * Implements hook_node_insert().
- */
-function sync_postgis_node_insert($node) {
-  if (sync_postgis_test_db_connection()) {
-    // Update the nid column in the postgis table.
-    if ($node->sync_postgis && !empty($node->sync_postgis)) {
-      db_set_active(SYNC_POSTGIS_DB);
-      $ids = array();
-      foreach($node->sync_postgis as $field_name => $values) {
-        $ids = array_merge($ids, $values);
+function sync_postgis_update_node_table($node, $is_new = FALSE) {
+  $syncd = sync_postgis_get_geofields($node->type);
+  if (!empty($syncd)) {
+    $table_name = 'pg_node_' . $node->type;
+    $wrapper = entity_metadata_wrapper('node', $node);
+    $entity_properties = $wrapper->getPropertyInfo();
+
+    // Keep a list of entity types so that we can detect entity reference fields
+    // and grab their label instead of id as the value to store.
+    $entity_types = array_keys(entity_get_info());
+
+    // Find out which fields we need to sync. If this list has changed since the
+    // database table was created at admin/config/system/sync-postgis/tables this
+    // will fail.
+    $extra_fields = array_filter(variable_get('sync_postgis_fields_' . $node->type, array()));
+
+    $values = array();
+    foreach ($extra_fields as $field) {
+      $value = $wrapper->{$field}->value();
+      $type = $entity_properties[$field]['type'];
+      // If the field type is an entity type, meaning a field that holds a ref
+      // to an entity, we'll be storing the entity label, not the id, so it
+      // will be a text field in the db.
+      if (in_array($type, $entity_types)) {
+	$entity = entity_load($type, array($value));
+	$value = entity_label($type, $entity);
       }
-      if (!empty($ids)) {
-	// Update the record in postgis for this field value.
-	$pg_query = "UPDATE {pg_node} SET nid = :nid" .
-		    " WHERE id IN (" . implode(',', $ids) . ")";
-	db_query($pg_query, array(':nid' => $node->nid));
-      }
-      db_set_active();
+      $values[$field] = $value;
     }
+
+    // Now we are about to either insert a row into or update an existing row in
+    // this node type's extra postgis table.
+    if (!$is_new) {
+      $result = db_query("SELECT nid from {$table_name} WHERE nid = :nid", array(':nid' => $node->nid))->fetchField();
+      if (!$result) {
+
+      }
+    }
+    else {
+    }
+
   }
+
 }
 
 /**
@@ -254,13 +310,29 @@ function sync_postgis_test_db_connection() {
   return FALSE;
 }
 
-function sync_postgis_get_schemas() {
+/**
+ * Get schema information for extra node data to send to PostGIS. This is used
+ * to create the tables in PostGIS.
+ *
+ * @param $bundle The bundle name to return a schema for, or NULL to return all
+ * 	schemas.
+ *
+ * @return An array of schemas, if no bundle name was passed in, otherwise the
+ * 	schema for that particular bundle.
+ */
+function sync_postgis_get_schemas($bundle = NULL) {
+  if ($bundle) {
+    $bundles = array($bundle);
+  }
+  else {
+    $bundles = array_keys(field_info_instances('node'));
+  }
+
   $schemas = array();
-  $entity_types = array_keys(entity_get_info());
   $db_field_types = sync_postgis_db_field_types();
-  // Build up our table schemas based on the settings for each enabled bundle.
-  foreach (field_info_instances('node') as $bundle_name => $fields) {
-    $syncd = array_filter(variable_get('sync_postgis_enabled_' . $bundle_name, array()));
+
+  foreach ($bundles as $bundle_name) {
+    $syncd = sync_postgis_get_geofields($bundle_name);
     if (!empty($syncd)) {
       $wrapper = entity_metadata_wrapper('node', NULL, array('bundle' => $bundle_name));
       $entity_properties = $wrapper->getPropertyInfo();
@@ -271,13 +343,6 @@ function sync_postgis_get_schemas() {
 	  'fields' => array()
 	);
 	foreach ($extra_fields as $field) {
-	  $type = $entity_properties[$field]['type'];
-	  // If the field type is an entity type, meaning a field that holds a ref
-	  // to an entity, we'll be storing the entity label, not the id, so it
-	  // will be a text field in the db.
-	  if (in_array($type, $entity_types)) {
-	    $type = 'text';
-	  }
 	  if (!isset($db_field_types[$type])) {
 	    $type = 'text';
 	  }
@@ -293,7 +358,7 @@ function sync_postgis_get_schemas() {
       }
     }
   }
-  return $schemas;
+  return $bundle ? $schemas[$bundle] : $schemas;
 }
 
 function sync_postgis_db_field_types() {
