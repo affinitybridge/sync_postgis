@@ -87,7 +87,7 @@ function sync_postgis_entity_presave($entity, $type) {
     if (!empty($fields)) {
       // Add a row for this entity to the entity table in PostGIS.
       if ($eid && !sync_postgis_entity_exists($type, $eid)) {
-	sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
+        sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
       }
       // Sync geo fields to PostGIS.
       $entity->sync_postgis = array();
@@ -114,13 +114,13 @@ function sync_postgis_entity_insert($entity, $type) {
         $ids = array_merge($ids, $values);
       }
       if (!empty($ids)) {
-	$wrapper = entity_metadata_wrapper($type, $entity);
-	$bundle = $wrapper->getBundle();
-	$eid = entity_id($entity_type, $entity);
-	// Insert a record for this entity into the PostGIS entity table.
-	sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
-	// Update the records in PostGIS witht he entity id.
-	sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('id', $ids, 'IN')), array('eid' => $eid));
+        $wrapper = entity_metadata_wrapper($type, $entity);
+        $bundle = $wrapper->getBundle();
+        $eid = entity_id($entity_type, $entity);
+        // Insert a record for this entity into the PostGIS entity table.
+        sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
+        // Update the records in PostGIS witht he entity id.
+        sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('id', $ids, 'IN')), array('eid' => $eid));
       }
     }
   }
@@ -172,16 +172,16 @@ function sync_postgis_sync_geoms(&$entity, $eid, $entity_type, $bundle, $field_n
     foreach ($field[$lang] as $delta => $item) {
       $wkt = $item['wkt'];
       if (empty($existing) || !isset($existing[$delta])) {
-	$geom_fields['delta'] = $delta;
-	$geom_fields[SYNC_PG_GEOMETRY_COLUMN] = $wkt;
-	$geom_id = sync_postgis_insert(SYNC_PG_GEOMETRY_TABLE, $geom_fields);
+        $geom_fields['delta'] = $delta;
+        $geom_fields[SYNC_PG_GEOMETRY_COLUMN] = $wkt;
+        $geom_id = sync_postgis_insert(SYNC_PG_GEOMETRY_TABLE, $geom_fields);
       }
       else {
-	$geom_id = $existing[$delta];
-	sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('id', $geom_id)), array(SYNC_PG_GEOMETRY_COLUMN => $wkt));
+        $geom_id = $existing[$delta];
+        sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('id', $geom_id)), array(SYNC_PG_GEOMETRY_COLUMN => $wkt));
       }
       if ($geom_id) {
-	$entity->sync_postgis[$field_name][$delta] = $geom_id;
+        $entity->sync_postgis[$field_name][$delta] = $geom_id;
       }
       // We unset these once we've processed them, so that if any are left in the
       // array we know that they must have been removed from the entity, and
@@ -292,7 +292,7 @@ function sync_postgis_get_postgis_connection() {
  * @param $eid The entity id
  *
  * @param $table The table to check, e.g. one of the specific bundle tables,
- * 	defaults to the entity table.
+ *   defaults to the entity table.
  */
 function sync_postgis_entity_exists($entity_type, $eid, $table = SYNC_PG_ENTITY_TABLE) {
   $connection = sync_postgis_get_postgis_connection();
@@ -329,7 +329,7 @@ function sync_postgis_insert($table, $fields) {
     try {
       $insert_id = sync_postgis_insert($table, $fields);
       if ($insert_id) {
-	$connection->query("UPDATE {" . SYNC_PG_GEOMETRY_TABLE . "} SET " . SYNC_PG_GEOMETRY_COLUMN . " = GeomFromText('" . $geom . "', 4326)  WHERE id = :id", array(':id' => $insert_id));
+        $connection->query("UPDATE {" . SYNC_PG_GEOMETRY_TABLE . "} SET " . SYNC_PG_GEOMETRY_COLUMN . " = GeomFromText('" . $geom . "', 4326)  WHERE id = :id", array(':id' => $insert_id));
       }
     }
     catch (Exception $e) {
@@ -350,7 +350,7 @@ function sync_postgis_update($table, $conditions, $fields) {
     try {
       $query = $connection->update($table);
       foreach ($conditions as $condition) {
-	$query->condition($condition);
+        $query->condition($condition);
       }
       $query->fields($fields)->execute();
       return TRUE;
@@ -365,12 +365,12 @@ function sync_postgis_update($table, $conditions, $fields) {
     unset($fields[SYNC_PG_GEOMETRY_COLUMN]);
     try {
       if (!empty($fields)) {
-	sync_postgis_update($table, $conditions, $fields);
+        sync_postgis_update($table, $conditions, $fields);
       }
       // TODO: This is gross, find a better way of getting the correct WHERE clause.
       if (count($conditions) == 1 && $conditions[0][0] == 'id') {
-	$connection->query("UPDATE {" . SYNC_PG_GEOMETRY_TABLE . "} SET " . SYNC_PG_GEOMETRY_COLUMN . " = GeomFromText('" . $geom . "', 4326)  WHERE id = :id", array(':id' => $conditions[0][1]));
-	return TRUE;
+        $connection->query("UPDATE {" . SYNC_PG_GEOMETRY_TABLE . "} SET " . SYNC_PG_GEOMETRY_COLUMN . " = GeomFromText('" . $geom . "', 4326)  WHERE id = :id", array(':id' => $conditions[0][1]));
+        return TRUE;
       }
     }
     catch (Exception $e) {
@@ -462,21 +462,21 @@ function sync_postgis_get_base_schemas() {
     SYNC_PG_ENTITY_TABLE => array(
       'description' => 'Holds the basic entity information for everything stored in the sync_postgis db',
       'fields' => array(
-	'entity_type' => array('description' => 'The entity type, e.g. node, taxonomy_term') + $db_field_types['text'],
-	'bundle' => array('description' => 'The bundle name') + $db_field_types['text'],
-	'eid' => array('description' => 'The entity id') + $db_field_types['integer'],
-	'label' => array('description' => 'The entity label') + $db_field_types['text'],
+      'entity_type' => array('description' => 'The entity type, e.g. node, taxonomy_term') + $db_field_types['text'],
+      'bundle' => array('description' => 'The bundle name') + $db_field_types['text'],
+      'eid' => array('description' => 'The entity id') + $db_field_types['integer'],
+      'label' => array('description' => 'The entity label') + $db_field_types['text'],
       ),
       'primary key' => array('entity_type', 'eid'),
     ),
     SYNC_PG_GEOMETRY_TABLE => array(
       'description' => 'Holds the geometry information for entities',
       'fields' => array(
-	'id' => array('description' => 'Serial identifier for this table') + $db_field_types['serial'],
-	'entity_type' => array('description' => 'The entity type, e.g. node, taxonomy_term') + $db_field_types['text'],
-	'eid' => array('description' => 'The entity id') + $db_field_types['integer'],
-	'field_name' => array('description' => 'The name of this field in the Drupal db') + $db_field_types['text'],
-	'delta' => array('description' => 'The delta of this field value') + $db_field_types['integer'],
+      'id' => array('description' => 'Serial identifier for this table') + $db_field_types['serial'],
+      'entity_type' => array('description' => 'The entity type, e.g. node, taxonomy_term') + $db_field_types['text'],
+      'eid' => array('description' => 'The entity id') + $db_field_types['integer'],
+      'field_name' => array('description' => 'The name of this field in the Drupal db') + $db_field_types['text'],
+      'delta' => array('description' => 'The delta of this field value') + $db_field_types['integer'],
       ),
       'foreign keys' => array(
           'entity_id' => array(
@@ -506,19 +506,19 @@ function sync_postis_create_table($table_name, $schema) {
   catch (Exception $e) {
     watchdog_exception('syncposgis', $e);
   }
-  
+
   if ($geoms) {
     $geom_defaults = array('srid' => 4326, 'type' => 'GEOMETRY', 'dimensions' => 2);
     foreach ($geoms as $name => $settings) {
       $settings += $geom_defaults;
       $sql = "SELECT AddGeometryColumn('public', '" . $table_name ."', '" . $name . "', " . $settings['srid'] . ", '" . $settings['type'] . "', ". $settings['dimensions'] .");";
       try {
-	$connection->query($sql);
-	// Add a gist index for this geometry column.
-	sync_postgis_add_index($table_name, $name, 'gist', $name);
+        $connection->query($sql);
+        // Add a gist index for this geometry column.
+        sync_postgis_add_index($table_name, $name, 'gist', $name);
       }
       catch (Exception $e) {
-	watchdog_exception('syncposgis', $e);
+        watchdog_exception('syncposgis', $e);
       }
     }
   }
@@ -584,10 +584,10 @@ function sync_postgis_queue_process_item($item) {
  * @param $entity_type The entity type, e.g. 'node' or 'taxonomy_term'
  *
  * @param $bundle The bundle name to return a schema for, or NULL to return all
- * 	schemas.
+ *   schemas.
  *
  * @return An array of schemas, if no bundle name was passed in, otherwise the
- * 	schema for that particular bundle.
+ *   schema for that particular bundle.
  */
 function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
   $schemas = &drupal_static(__FUNCTION__, array());
@@ -600,33 +600,33 @@ function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
     if (!isset($schemas[$type_name]) || ($bundle && !isset($schemas[$type_name][$bundle]))) {
       $bundles = $bundle ? array($bundle) : array_keys($instances[$type_name]);
       foreach ($bundles as $bundle_name) {
-	$syncd = sync_postgis_get_geofields($type_name, $bundle_name);
-	if (!empty($syncd)) {
-	  $wrapper = entity_metadata_wrapper($type_name, NULL, array('bundle' => $bundle_name));
-	  $entity_properties = $wrapper->getPropertyInfo();
-	  $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type_name . '_' . $bundle_name, array()));
-	  if (!empty($extra_fields)) {
-	    $schemas[$type_name][$bundle_name] = array(
-	      'description' => sprintf('Holds extra %s %s information', $bundle_name, $type_name),
-	      'fields' => array()
-	    );
-	    
-	    foreach ($extra_fields as $field) {
-	      $type = $entity_properties[$field]['type'];
-	      if (!isset($db_field_types[$type])) {
-		$type = 'text';
-	      }
-	       //TODO: If it's a multivalue field, also store it as text - it will
-	       //just be a comma-separated list of values.
+  $syncd = sync_postgis_get_geofields($type_name, $bundle_name);
+  if (!empty($syncd)) {
+    $wrapper = entity_metadata_wrapper($type_name, NULL, array('bundle' => $bundle_name));
+    $entity_properties = $wrapper->getPropertyInfo();
+    $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type_name . '_' . $bundle_name, array()));
+    if (!empty($extra_fields)) {
+      $schemas[$type_name][$bundle_name] = array(
+        'description' => sprintf('Holds extra %s %s information', $bundle_name, $type_name),
+        'fields' => array()
+      );
+      
+      foreach ($extra_fields as $field) {
+        $type = $entity_properties[$field]['type'];
+        if (!isset($db_field_types[$type])) {
+    $type = 'text';
+        }
+         //TODO: If it's a multivalue field, also store it as text - it will
+         //just be a comma-separated list of values.
     
-	      $field_def = array(
-		'description' => $entity_properties[$field]['description'],
-	      );
-	      $field_def += $db_field_types[$type];
-	      $schemas[$type_name][$bundle_name]['fields'][$field] = $field_def;
-	    }
-	  }
-	}
+        $field_def = array(
+    'description' => $entity_properties[$field]['description'],
+        );
+        $field_def += $db_field_types[$type];
+        $schemas[$type_name][$bundle_name]['fields'][$field] = $field_def;
+      }
+    }
+  }
       }
     }
   }
