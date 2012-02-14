@@ -2,6 +2,9 @@
 
 // The key used for the postgis db in settings.php.
 define('SYNC_POSTGIS_DB', 'sync_postgis');
+define('SYNC_PG_ENTITY_TABLE', 'entity');
+define('SYNC_PG_GEOMETRY_TABLE', 'entity_geom');
+define('SYNC_PG_GEOMETRY_COLUMN', 'geom');
 
 /**
  * Implements hook_menu().
@@ -17,15 +20,15 @@ function sync_postgis_menu() {
     'type' => MENU_LOCAL_TASK | MENU_NORMAL_ITEM,
     'file' => 'sync_postgis.admin.inc',
   );
-  //$items['admin/config/system/sync-postgis/db'] = array(
-  //  'title' => 'Sync PostGis Database Set-up',
-  //  'description' => 'Ensure there is a PostGIS database with a table for us to sync to.',
-  //  'page callback' => 'drupal_get_form',
-  //  'page arguments' => array('sync_postgis_check_db_form'),
-  //  'access arguments' => array('administer site configuration'),
-  //  'type' => MENU_LOCAL_ACTION,
-  //  'file' => 'sync_postgis.admin.inc',
-  //);
+  $items['admin/config/system/sync-postgis/db'] = array(
+    'title' => 'Sync PostGis Database Set-up',
+    'description' => 'Ensure there is a PostGIS database with a table for us to sync to.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('sync_postgis_check_db_form'),
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_LOCAL_ACTION,
+    'file' => 'sync_postgis.admin.inc',
+  );
   $items['admin/config/system/sync-postgis/tables'] = array(
     'title' => 'Sync PostGis DB Tables',
     'description' => 'Create extra tables for storing more node information.',
@@ -48,174 +51,6 @@ function sync_postgis_menu() {
 }
 
 /**
- * Implements hook_node_presave().
- */
-function sync_postgis_node_presave($node) {
-  if (sync_postgis_test_db_connection()) {
-    $fields = sync_postgis_get_geofields($node->type);
-    if (!empty($fields)) {
-      db_set_active(SYNC_POSTGIS_DB);
-      $node->sync_postgis = array();
-      foreach ($fields as $field_name) {
-        sync_postgis_sync($node, $field_name);
-      }
-      db_set_active();
-    }
-  }
-}
-
-/**
- * Syncs a node to the node table in the postgis db.
- */
-function sync_postgis_sync(&$node, $field_name) {
-  // Keep track of whether we have existing values for each field delta in the
-  // postgis db.
-  $existing = array();
-  if ($node->nid) {
-    $result = db_query("SELECT id, delta from {pg_node} WHERE nid = :nid AND field = :field", array(':nid' => $node->nid, ':field' => $field_name), array('fetch' => PDO::FETCH_ASSOC))->fetchAll();
-    foreach ($result as $row) {
-      $existing[$row['delta']] = $row['id'];
-    }
-  }
-  $field = $node->{$field_name};
-  $lang = $node->language;
-
-  if (!empty($field[$lang][0]['wkt'])) {
-    $node->sync_postgis[$field_name] = array();
-
-    foreach ($field[$lang] as $delta => $item) {
-      $wkt = $item['wkt'];
-
-      if (empty($existing) || !isset($existing[$delta])) {
-	// Build our insert query.
-	$pg_query = 'INSERT INTO {pg_node} (nid, type, field, delta, title, geom, geom_albers) VALUES (';
-
-	$pg_query .= $node->nid ? $node->nid . ", " : "NULL, ";
-	$pg_query .= "'".$node->type."', '".$field_name."', '".$delta."', '".pg_escape_string($node->title)."', ";
-	$pg_query .= "GeomFromText('" . $wkt . "', 4326)".", ";
-	$pg_query .= "st_transform(GeomFromText('" . $wkt . "', 4326), 3005)";
-	$pg_query .= ") RETURNING id;";
-
-	try {
-	  $result = db_query($pg_query);
-	  try {
-	    // Grab the last insert id from pg.
-	    $pgid = db_query("SELECT currval('node_id_seq') FROM {pg_node}")->fetchField();
-	  }
-	  catch (Exception $e) {
-	    watchdog_exception('sync_postgis', $e);
-	  }
-	}
-	catch (Exception $e) {
-	  watchdog_exception('sync_postgis', $e);
-	}
-      }
-      else {
-	// Update the record in postgis for this field value.
-	$pg_query = "UPDATE {pg_node} SET title = '" .
-	  pg_escape_string($node->title) . "', geom = " .
-	  "GeomFromText('" . $wkt . "', 4326), geom_albers = " .
-	  "st_transform(GeomFromText('" . $wkt . "', 4326), 3005)" .
-	  " WHERE id = :id";
-	db_query($pg_query, array(':id' => $existing[$delta]));
-	$pgid = $existing[$delta];
-      }
-      if ($pgid) {
-	$node->sync_postgis[$field_name][$delta] = $pgid;
-      }
-      unset($existing[$delta]);
-    }
-  }
-  if (!empty($existing)) {
-    // Delete remaining records from the postgis db as the node no longer has
-    // these values.
-    foreach ($existing as $delta => $id) {
-      db_query("DELETE from {pg_node} WHERE id = :id", array(':id' => $id));
-    }
-  }
-}
-
-/**
- * Implements hook_node_insert().
- */
-function sync_postgis_node_insert($node) {
-  if (sync_postgis_test_db_connection()) {
-    // Update the nid column in the postgis table.
-    if ($node->sync_postgis && !empty($node->sync_postgis)) {
-      db_set_active(SYNC_POSTGIS_DB);
-      $ids = array();
-      foreach($node->sync_postgis as $field_name => $values) {
-        $ids = array_merge($ids, $values);
-      }
-      if (!empty($ids)) {
-	// Update the record in postgis for this field value.
-	$pg_query = "UPDATE {pg_node} SET nid = :nid" .
-		    " WHERE id IN (" . implode(',', $ids) . ")";
-	db_query($pg_query, array(':nid' => $node->nid));
-      }
-      db_set_active();
-    }
-  }
-}
-
-/**
- * Implements hook_node_delete().
- */
-function sync_postgis_node_delete($node) {
-  if (sync_postgis_test_db_connection()) {
-    db_set_active(SYNC_POSTGIS_DB);
-    // Delete the node record from the postgis table, if it exists.
-    $pg_query = "DELETE FROM {pg_node} WHERE nid = :nid";
-    try {
-      db_query($pg_query, array(':nid' => $node->nid));
-    }
-    catch (Exception $e) {
-      watchdog_exception('sync_postgis', $e);
-    }
-    db_set_active();
-  }
-}
-
-/**
- * Gets and statically stores the list of geo fields per content type.
- */
-function sync_postgis_get_geofields($type) {
-  $fields = &drupal_static(__FUNCTION__, array());
-  if (isset($fields[$type])) {
-    return $fields[$type];
-  }
-  $fields[$type] = array_filter(variable_get('sync_postgis_enabled_' . $type, array()));
-  return $fields[$type];
-}
-
-/**
- * Implements hook_cron_queue_info().
- */
-function sync_postgis_cron_queue_info() {
-  $queues['sync_postgis_queue'] = array(
-    'worker callback' => 'sync_postgis_queue_process_item',
-    'time' => 60,
-  );
-  return $queues;
-}
-
-/**
- * Syncs a single queued item.
- */
-function sync_postgis_queue_process_item($item) {
-  // Call whatever function will sync this item.
-  if (isset($item['nid']) && is_numeric($item['nid'])) {
-    // We just need to call node_save on the node in order to force it to get
-    // syncd to the PostGIS db.
-    $node = node_load($item['nid']);
-    if ($node->nid && !$node->is_new) {
-      node_save($node);
-      drupal_set_message(t('Processed %title', array('%title' => $item['title'])));
-    }
-  }
-}
-
-/**
  * Implements hook_requirements().
  */
 function sync_postgis_requirements($phase) {
@@ -224,7 +59,6 @@ function sync_postgis_requirements($phase) {
     $requirements['sync_postgis'] = array(
       'title' => t('PostGIS Database'),
     );
-
     if (sync_postgis_test_db_connection()) {
       $requirements['sync_postgis']['severity'] = REQUIREMENT_OK;
       $requirements['sync_postgis']['value'] = t('Successfully connected to the PostGis Database');
@@ -233,18 +67,206 @@ function sync_postgis_requirements($phase) {
       $requirements['sync_postgis']['severity'] = REQUIREMENT_ERROR;
       $requirements['sync_postgis']['value'] = t('Could not connect to the PostGIS database. Make sure it has been added to your settings.php');
     }
-
   }
-
   return $requirements;
 }
+
+/******************************** Entity hooks *******************************/
+
+
+/**
+ * Implements hook_entity_presave().
+ */
+function sync_postgis_entity_presave($entity, $type) {
+  if (sync_postgis_test_db_connection()) {
+    $wrapper = entity_metadata_wrapper($type, $entity);
+    $bundle = $wrapper->getBundle();
+    $eid = entity_id($type, $entity);
+    $fields = sync_postgis_get_geofields($type, $bundle);
+
+    if (!empty($fields)) {
+      // Add a row for this entity to the entity table in PostGIS.
+      if ($eid && !sync_postgis_entity_exists($type, $eid)) {
+	sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
+      }
+      // Sync geo fields to PostGIS.
+      $entity->sync_postgis = array();
+      foreach ($fields as $field_name) {
+        sync_postgis_sync_geoms($entity, $eid, $type, $bundle, $field_name);
+      }
+      // Now sync any other required fields to PostGIS.
+      $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type . '_' . $bundle, array()));
+      if (!empty($extra_fields)) {
+        sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields);
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_insert().
+ */
+function sync_postgis_entity_insert($entity, $type) {
+  if (sync_postgis_test_db_connection()) {
+    if ($entity->sync_postgis && !empty($entity->sync_postgis)) {
+      $ids = array();
+      foreach($entity->sync_postgis as $field_name => $values) {
+        $ids = array_merge($ids, $values);
+      }
+      if (!empty($ids)) {
+	$wrapper = entity_metadata_wrapper($type, $entity);
+	$bundle = $wrapper->getBundle();
+	$eid = entity_id($entity_type, $entity);
+	// Insert a record for this entity into the PostGIS entity table.
+	sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
+	// Update the records in PostGIS witht he entity id.
+	sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('id', $ids, 'IN')), array('eid' => $eid));
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_delete().
+ */
+function sync_postgis_entity_delete($entity, $type) {
+  if (sync_postgis_test_db_connection()) {
+    $wrapper = entity_metadata_wrapper($type, $entity);
+    $eid = entity_id($type, $entity);
+    sync_postgis_delete_entity($eid, $type);
+  }
+}
+
+/***************************** End of entity hooks ****************************/
+
+
+/**
+ * Syncs an entity's geo field data to the entity_geom table in the postgis db.
+ * Called from sync_postgis_entity_presave().
+ */
+function sync_postgis_sync_geoms(&$entity, $eid, $entity_type, $bundle, $field_name) {
+  // Keep track of whether we have existing values for each field delta in the
+  // postgis db.
+  $existing = array();
+  if ($eid) {
+    // The entity is being updated, it may already have geometries in the PostGIS
+    // database. Grab them and store them in an array.
+    $result = sync_postgis_get_geoms_for_eid($eid, $entity_type, $field_name);
+    foreach ($result as $row) {
+      $existing[$row['delta']] = $row['id'];
+    }
+  }
+  // TODO: should we be leveraging the wrapper here to deal with this stuff?
+  $field = $entity->{$field_name};
+  $lang = $entity->language;
+
+  if (!empty($field[$lang][0]['wkt'])) {
+    // This array will be used when inserting the values into PostGIS.
+    $geom_fields = array(
+      'eid' => $eid,
+      'entity_type' => $entity_type,
+      'field_name' => $field_name,
+    );
+    // We'll store the PostGIS ids in the 
+    $entity->sync_postgis[$field_name] = array();
+    foreach ($field[$lang] as $delta => $item) {
+      $wkt = $item['wkt'];
+      if (empty($existing) || !isset($existing[$delta])) {
+	$geom_fields['delta'] = $delta;
+	$geom_fields[SYNC_PG_GEOMETRY_COLUMN] = $wkt;
+	$geom_id = sync_postgis_insert(SYNC_PG_GEOMETRY_TABLE, $geom_fields);
+      }
+      else {
+	$geom_id = $existing[$delta];
+	sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('id', $geom_id)), array(SYNC_PG_GEOMETRY_COLUMN => $wkt));
+      }
+      if ($geom_id) {
+	$entity->sync_postgis[$field_name][$delta] = $geom_id;
+      }
+      // We unset these once we've processed them, so that if any are left in the
+      // array we know that they must have been removed from the entity, and
+      // therefore need to be removed from PostGIS.
+      unset($existing[$delta]);
+    }
+  }
+  if (!empty($existing)) {
+    // Delete remaining records from the postgis db as the entity no longer has
+    // these values.
+    foreach ($existing as $delta => $id) {
+      sync_postgis_delete(SYNC_PG_GEOMETRY_TABLE, array(array('id', $id)));
+    }
+  }
+}
+
+/**
+ * Syncs the other field data to PostGIS.
+ */
+function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields) {
+  $table_name = sync_postgis_table_name($type, $bundle);
+  $fields = array(
+    'eid' => $eid,
+    'entity_type' => $type,
+  );
+  foreach ($extra_fields as $field_name) {
+    $fields[$field_name] = $wrapper->{$field_name}->raw();
+  }
+  if (!sync_postgis_entity_exists($type, $eid, $table_name)) {
+    sync_postgis_insert($table_name, $fields);
+  }
+  else {
+    sync_postgis_update($table_name, array(array('eid', $eid), array('entity_type' => $type)), $fields);
+  }
+}
+
+
+/********************* Entity-related helper functions ************************/
+
+
+/**
+ * Retrieves the geometries for a particular entity.
+ */
+function sync_postgis_get_geoms_for_eid($eid, $entity_type, $field_name) {
+  $connection = sync_postgis_get_postgis_connection();
+  $query = $connection->select(SYNC_PG_GEOMETRY_TABLE, 'g', array('fetch' => PDO::FETCH_ASSOC))
+    ->fields('g', array('id', 'delta'))
+    ->condition('g.eid', $eid)
+    ->condition('g.entity_type', $entity_type);
+  $result = $query->execute()->fetchAll();
+  return $result;
+}
+
+/**
+ * Delete an entity entirely from PostGIS.
+ */
+function sync_postgis_delete_entity($eid, $type) {
+  // TODO: Figure out how to add "ON DELETE CASCADE" to tables with a foreign
+  // key to the entity table.
+  sync_postgis_delete(SYNC_PG_GEOMETRY_TABLE, array(array('eid', $eid), array('entity_type', $type)));
+  sync_postgis_delete(SYNC_PG_ENTITY_TABLE, array(array('eid', $eid), array('entity_type', $type)));
+  module_invoke_all('sync_postgis_entity_delete', $eid, $type);
+}
+
+/**
+ * Gets and statically stores the list of geo fields per entity bundle.
+ */
+function sync_postgis_get_geofields($entity_type, $bundle) {
+  $fields = &drupal_static(__FUNCTION__, array());
+  if (isset($fields[$entity_type]) && isset($fields[$entity_type][$bundle])) {
+    return $fields[$entity_type][$bundle];
+  }
+  $fields[$entity_type][$bundle] = array_filter(variable_get('sync_pg_enabled_' . $entity_type . '_' . $bundle, array()));
+  return $fields[$entity_type][$bundle];
+}
+
+
+/**** Helper functions for sending queries to the PostGIS db, general CRUD.****/
 
 /**
  * Tests whether there's a postgis database set up that can be connected to.
  */
 function sync_postgis_test_db_connection() {
   try {
-    if ($db = Database::getConnection('default', SYNC_POSTGIS_DB)) {
+    if ($connection = sync_postgis_get_postgis_connection()) {
       return TRUE;
     }
   }
@@ -254,50 +276,145 @@ function sync_postgis_test_db_connection() {
   return FALSE;
 }
 
-function sync_postgis_get_schemas() {
-  $schemas = array();
-  $entity_types = array_keys(entity_get_info());
-  $db_field_types = sync_postgis_db_field_types();
-  // Build up our table schemas based on the settings for each enabled bundle.
-  foreach (field_info_instances('node') as $bundle_name => $fields) {
-    $syncd = array_filter(variable_get('sync_postgis_enabled_' . $bundle_name, array()));
-    if (!empty($syncd)) {
-      $wrapper = entity_metadata_wrapper('node', NULL, array('bundle' => $bundle_name));
-      $entity_properties = $wrapper->getPropertyInfo();
-      $extra_fields = array_filter(variable_get('sync_postgis_fields_' . $bundle_name, array()));
-      if (!empty($extra_fields)) {
-	$schemas[$bundle_name] = array(
-	  'description' => sprintf('Holds extra %s node information', $bundle_name),
-	  'fields' => array()
-	);
-	foreach ($extra_fields as $field) {
-	  $type = $entity_properties[$field]['type'];
-	  // If the field type is an entity type, meaning a field that holds a ref
-	  // to an entity, we'll be storing the entity label, not the id, so it
-	  // will be a text field in the db.
-	  if (in_array($type, $entity_types)) {
-	    $type = 'text';
-	  }
-	  if (!isset($db_field_types[$type])) {
-	    $type = 'text';
-	  }
-	  // TODO: If it's a multivalue field, also store it as text - it will
-	  // just be a comma-separated list of values.
-
-	  $field_def = array(
-	    'description' => $entity_properties[$field]['description'],
-	  );
-	  $field_def += $db_field_types[$type];
-	  $schemas[$bundle_name]['fields'][$field] = $field_def;
-	}
-      }
-    }
-  }
-  return $schemas;
+/**
+ * Returns a Database Connection object for the PostGIS db.
+ */
+function sync_postgis_get_postgis_connection() {
+  $connection = &drupal_static(__FUNCTION__,  Database::getConnection('default', SYNC_POSTGIS_DB));
+  return $connection;
 }
 
+/**
+ * Check if an entity exists in PostGIS.
+ *
+ * @param $entity_type The entity type.
+ *
+ * @param $eid The entity id
+ *
+ * @param $table The table to check, e.g. one of the specific bundle tables,
+ * 	defaults to the entity table.
+ */
+function sync_postgis_entity_exists($entity_type, $eid, $table = SYNC_PG_ENTITY_TABLE) {
+  $connection = sync_postgis_get_postgis_connection();
+  $select = $connection->select($table, 'e');
+  $result = $select->fields('e', array('eid'))
+    ->condition('e.eid', $eid)
+    ->condition('e.entity_type', $entity_type)
+    ->execute();
+  return $result->fetchField();
+}
+
+/**
+ * Perform an insert query on a PostGIS table.
+ */
+function sync_postgis_insert($table, $fields) {
+  $connection = sync_postgis_get_postgis_connection();
+  // When it comes to insert queries, we can hand over to DBTNG as long as we're
+  // not dealing with the geom field in the entity_geom table.
+  if (!($table == SYNC_PG_GEOMETRY_TABLE && in_array(SYNC_PG_GEOMETRY_COLUMN, array_keys($fields)))) {
+    try {
+       return $connection->insert($table)->fields($fields)->execute();
+    }
+    catch (Exception $e) {
+      watchdog_exception('sync_postgis', $e);
+    }
+  }
+  else {
+    // We use a transaction because we're using a separate query to insert the
+    // non-geom stuff, followed by sending an update statement to get the geom
+    // in.
+    $transaction = $connection->startTransaction();
+    $geom = $fields[SYNC_PG_GEOMETRY_COLUMN];
+    unset($fields[SYNC_PG_GEOMETRY_COLUMN]);
+    try {
+      $insert_id = sync_postgis_insert($table, $fields);
+      if ($insert_id) {
+	$connection->query("UPDATE {" . SYNC_PG_GEOMETRY_TABLE . "} SET " . SYNC_PG_GEOMETRY_COLUMN . " = GeomFromText('" . $geom . "', 4326)  WHERE id = :id", array(':id' => $insert_id));
+      }
+    }
+    catch (Exception $e) {
+      $transaction->rollback();
+      watchdog_exception('sync_postgis', $e);
+    }
+  }
+}
+
+/**
+ * Perform an update query on a PostGIS table.
+ */
+function sync_postgis_update($table, $conditions, $fields) {
+  $connection = sync_postgis_get_postgis_connection();
+
+  // As long as we're not dealing with the geom field, it's straight-up DBTNG
+  if (!($table == SYNC_PG_GEOMETRY_TABLE && in_array(SYNC_PG_GEOMETRY_COLUMN, array_keys($fields)))) {
+    try {
+      $query = $connection->update($table);
+      foreach ($conditions as $condition) {
+	$query->condition($condition);
+      }
+      $query->fields($fields)->execute();
+      return TRUE;
+    }
+    catch (Exception $e) {
+      watchdog_exception('sync_postgis', $e);
+    }
+  }
+  else {
+    $transaction = $connection->startTransaction();
+    $geom = $fields[SYNC_PG_GEOMETRY_COLUMN];
+    unset($fields[SYNC_PG_GEOMETRY_COLUMN]);
+    try {
+      if (!empty($fields)) {
+	sync_postgis_update($table, $conditions, $fields);
+      }
+      // TODO: This is gross, find a better way of getting the correct WHERE clause.
+      if (count($conditions) == 1 && $conditions[0][0] == 'id') {
+	$connection->query("UPDATE {" . SYNC_PG_GEOMETRY_TABLE . "} SET " . SYNC_PG_GEOMETRY_COLUMN . " = GeomFromText('" . $geom . "', 4326)  WHERE id = :id", array(':id' => $conditions[0][1]));
+	return TRUE;
+      }
+    }
+    catch (Exception $e) {
+      $transaction->rollback();
+      watchdog_exception('sync_postgis', $e);
+    }
+  }
+  return FALSE;
+}
+
+/**
+ * Perform a delete query on a PostGIS table.
+ */
+function sync_postgis_delete($table, $conditions) {
+  $connection = sync_postgis_get_postgis_connection();
+  try {
+     $query = $connection->delete($table);
+     foreach ($conditions as $condition) {
+      $query->condition($condition);
+     }
+     $query->execute();
+     return TRUE;
+  }
+  catch (Exception $e) {
+    watchdog_exception('sync_postgis', $e);
+  }
+}
+
+/**************** Helper functions ******************/
+
+function sync_postgis_table_name($type, $bundle) {
+  return $type . '__' . $bundle;
+}
+
+/**
+ * Returns an array of database field definition arrays.
+ */
 function sync_postgis_db_field_types() {
-  return array(
+  $types = array(
+    'serial' => array(
+      'type' => 'serial',
+      'unsigned' => TRUE,
+      'not null' => TRUE,
+    ),
     'boolean' => array(
       'type' => 'int',
       'size' => 'tiny',
@@ -306,15 +423,6 @@ function sync_postgis_db_field_types() {
       'default' => 0,
     ),
     'date' => array(
-      
-    ),
-    'field_item_file' => array(
-      
-    ),
-    'field_item_image' => array(
-      
-    ),
-    'field_item_link' => array(
       
     ),
     'integer' => array(
@@ -334,6 +442,198 @@ function sync_postgis_db_field_types() {
       'length' => 255,
       'not null' => TRUE,
       'default' => '',
+    ),
+  );
+  // Add integer field types for entity reference fields.
+  $entity_info = entity_get_info();
+  $entity_types = array_keys($entity_info);
+  foreach ($entity_types as $type) {
+    $types[$type] = $types['integer'];
+  }
+  return $types;
+}
+
+/**
+ * Returns the schemas of the two basic tables required for sync_postgis.
+ */
+function sync_postgis_get_base_schemas() {
+  $db_field_types = sync_postgis_db_field_types();
+  $schemas = array(
+    SYNC_PG_ENTITY_TABLE => array(
+      'description' => 'Holds the basic entity information for everything stored in the sync_postgis db',
+      'fields' => array(
+	'entity_type' => array('description' => 'The entity type, e.g. node, taxonomy_term') + $db_field_types['text'],
+	'bundle' => array('description' => 'The bundle name') + $db_field_types['text'],
+	'eid' => array('description' => 'The entity id') + $db_field_types['integer'],
+	'label' => array('description' => 'The entity label') + $db_field_types['text'],
+      ),
+      'primary key' => array('entity_type', 'eid'),
+    ),
+    SYNC_PG_GEOMETRY_TABLE => array(
+      'description' => 'Holds the geometry information for entities',
+      'fields' => array(
+	'id' => array('description' => 'Serial identifier for this table') + $db_field_types['serial'],
+	'entity_type' => array('description' => 'The entity type, e.g. node, taxonomy_term') + $db_field_types['text'],
+	'eid' => array('description' => 'The entity id') + $db_field_types['integer'],
+	'field_name' => array('description' => 'The name of this field in the Drupal db') + $db_field_types['text'],
+	'delta' => array('description' => 'The delta of this field value') + $db_field_types['integer'],
+      ),
+      'foreign keys' => array(
+          'entity_id' => array(
+            'table' => SYNC_PG_ENTITY_TABLE,
+            'columns' => array('entity_type' => 'entity_type', 'eid' => 'eid'),
+          ),
+      ),
+      'geometry columns' => array('geom' => array('srid' => 4326, 'type' => 'GEOMETRY', 'dimensions' => 2))
     )
   );
+  return $schemas;
+}
+
+/**
+ * Create a table in the sync_postgis database.
+ */
+function sync_postis_create_table($table_name, $schema) {
+  $connection = sync_postgis_get_postgis_connection();
+  $geoms = NULL;
+  if (isset($schema['geometry columns'])) {
+    $geoms = $schema['geometry columns'];
+    unset($schema['geometry columns']);
+  }
+  try {
+    $connection->schema()->createTable($table_name, $schema);
+  }
+  catch (Exception $e) {
+    watchdog_exception('syncposgis', $e);
+  }
+  
+  if ($geoms) {
+    $geom_defaults = array('srid' => 4326, 'type' => 'GEOMETRY', 'dimensions' => 2);
+    foreach ($geoms as $name => $settings) {
+      $settings += $geom_defaults;
+      $sql = "SELECT AddGeometryColumn('public', '" . $table_name ."', '" . $name . "', " . $settings['srid'] . ", '" . $settings['type'] . "', ". $settings['dimensions'] .");";
+      try {
+	$connection->query($sql);
+	// Add a gist index for this geometry column.
+	sync_postgis_add_index($table_name, $name, 'gist', $name);
+      }
+      catch (Exception $e) {
+	watchdog_exception('syncposgis', $e);
+      }
+    }
+  }
+}
+
+/**
+ * Add an index on a postgis table.
+ */
+function sync_postgis_add_index($table, $name, $type = 'btree', $field_string) {
+  $connection = sync_postgis_get_postgis_connection();
+  $schema = $connection->schema();
+  
+  if (!$schema->tableExists($table)) {
+    throw new DatabaseSchemaObjectDoesNotExistException(t("Cannot add index %name to table %table: table doesn't exist.", array('%table' => $table, '%name' => $name)));
+  }
+  if ($schema->indexExists($table, $name)) {
+    throw new DatabaseSchemaObjectExistsException(t("Cannot add index %name to table %table: index already exists.", array('%table' => $table, '%name' => $name)));
+  }
+
+  $query = 'CREATE INDEX "' . $schema->prefixNonTable($table, $name, 'idx') . '" ON {' . $table . '}';
+  $query .= ' USING ' . $type;
+  $query .= '(';
+  $query .= $field_string . ')';
+  $connection->query($query);
+}
+
+/**
+ * Implements hook_cron_queue_info().
+ */
+function sync_postgis_cron_queue_info() {
+  $queues['sync_postgis_queue'] = array(
+    'worker callback' => 'sync_postgis_queue_process_item',
+    'time' => 60,
+  );
+  return $queues;
+}
+
+/**
+ * Syncs a single queued item.
+ */
+function sync_postgis_queue_process_item($item) {
+  // Call whatever function will sync this item.
+  if (isset($item['eid']) && is_numeric($item['eid'])) {
+    // We just need to call entity_save on the entity in order to force it to get
+    // syncd to the PostGIS db.
+    $entity_type = $item['entity_type'];
+    if ($entity = entity_load_single($entity_type, $item['eid'])) {
+      entity_save($entity_type, $entity);
+      drupal_set_message(t('Processed %bundle %type %id', array('%bundle' => $item['bundle'], '%type' => $entity_type, '%id' => $item['eid'])));
+    }
+    else {
+      drupal_set_message(t('There was a problem with %bundle %type %id', array('%bundle' => $item['bundle'], '%type' => $entity_type, '%id' => $item['eid'])), 'error');
+    }
+  }
+}
+
+
+
+/**
+ * Get schema information for extra entity data to send to PostGIS. This is used
+ * to create the tables in PostGIS.
+ *
+ * @param $entity_type The entity type, e.g. 'node' or 'taxonomy_term'
+ *
+ * @param $bundle The bundle name to return a schema for, or NULL to return all
+ * 	schemas.
+ *
+ * @return An array of schemas, if no bundle name was passed in, otherwise the
+ * 	schema for that particular bundle.
+ */
+function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
+  $schemas = &drupal_static(__FUNCTION__, array());
+  $instances = field_info_instances($entity_type, $bundle);
+
+  $entity_types = $entity_type ? array($entity_type) : array_keys($instances);
+  $db_field_types = sync_postgis_db_field_types();
+
+  foreach ($entity_types as $type_name) {
+    if (!isset($schemas[$type_name]) || ($bundle && !isset($schemas[$type_name][$bundle]))) {
+      $bundles = $bundle ? array($bundle) : array_keys($instances[$type_name]);
+      foreach ($bundles as $bundle_name) {
+	$syncd = sync_postgis_get_geofields($type_name, $bundle_name);
+	if (!empty($syncd)) {
+	  $wrapper = entity_metadata_wrapper($type_name, NULL, array('bundle' => $bundle_name));
+	  $entity_properties = $wrapper->getPropertyInfo();
+	  $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type_name . '_' . $bundle_name, array()));
+	  if (!empty($extra_fields)) {
+	    $schemas[$type_name][$bundle_name] = array(
+	      'description' => sprintf('Holds extra %s %s information', $bundle_name, $type_name),
+	      'fields' => array()
+	    );
+	    
+	    foreach ($extra_fields as $field) {
+	      $type = $entity_properties[$field]['type'];
+	      if (!isset($db_field_types[$type])) {
+		$type = 'text';
+	      }
+	       //TODO: If it's a multivalue field, also store it as text - it will
+	       //just be a comma-separated list of values.
+    
+	      $field_def = array(
+		'description' => $entity_properties[$field]['description'],
+	      );
+	      $field_def += $db_field_types[$type];
+	      $schemas[$type_name][$bundle_name]['fields'][$field] = $field_def;
+	    }
+	  }
+	}
+      }
+    }
+  }
+  if ($entity_type) {
+    return $bundle ? $schemas[$entity_type][$bundle] : $schemas[$entity_type];
+  }
+  else {
+    return $schemas;
+  }
 }
