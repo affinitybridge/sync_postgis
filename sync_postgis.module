@@ -163,7 +163,7 @@ function sync_postgis_sync_geoms(&$entity, $eid, $entity_type, $bundle, $field_n
   if (!empty($field[$lang][0]['wkt'])) {
     // This array will be used when inserting the values into PostGIS.
     $geom_fields = array(
-      'eid' => $eid,
+      'eid' => $eid ? $eid : 0,
       'entity_type' => $entity_type,
       'field_name' => $field_name,
     );
@@ -204,7 +204,7 @@ function sync_postgis_sync_geoms(&$entity, $eid, $entity_type, $bundle, $field_n
 function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields) {
   $table_name = sync_postgis_table_name($type, $bundle);
   $fields = array(
-    'eid' => $eid,
+    'eid' => $eid ? $eid : 0,
     'entity_type' => $type,
   );
   foreach ($extra_fields as $field_name) {
