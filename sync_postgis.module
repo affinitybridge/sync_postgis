@@ -581,6 +581,9 @@ function sync_postgis_create_table($table_name, $schema) {
   }
 }
 
+/**
+ * Drop a table in the sync_postgis database.
+ */
 function sync_postgis_drop_table($table_name, $geoms = NULL) {
   $connection = sync_postgis_get_postgis_connection();
   try {
