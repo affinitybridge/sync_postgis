@@ -94,6 +94,30 @@ function sync_postgis_entity_presave($entity, $type) {
       foreach ($fields as $field_name) {
         sync_postgis_sync_geoms($entity, $eid, $type, $bundle, $field_name);
       }
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_insert().
+ */
+function sync_postgis_entity_insert($entity, $type) {
+  if (sync_postgis_test_db_connection()) {
+    
+    if ($entity->sync_postgis && !empty($entity->sync_postgis)) {
+      $wrapper = entity_metadata_wrapper($type, $entity);
+      $bundle = $wrapper->getBundle();
+      $eid = $wrapper->getIdentifier();
+      $ids = array();
+      foreach($entity->sync_postgis as $field_name => $values) {
+        $ids = array_merge($ids, $values);
+      }
+      if (!empty($ids)) {
+        // Insert a record for this entity into the PostGIS entity table.
+        sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
+        // Update the records in PostGIS with the entity id.
+        sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('column' => 'id', 'value' => $ids)), array('eid' => $eid));
+      }
       // Now sync any other required fields to PostGIS.
       $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type . '_' . $bundle, array()));
       if (!empty($extra_fields)) {
@@ -104,25 +128,16 @@ function sync_postgis_entity_presave($entity, $type) {
 }
 
 /**
- * Implements hook_entity_insert().
+ * Implements hook_entity_update().
  */
-function sync_postgis_entity_insert($entity, $type) {
-  if (sync_postgis_test_db_connection()) {
-    if ($entity->sync_postgis && !empty($entity->sync_postgis)) {
-      $ids = array();
-      foreach($entity->sync_postgis as $field_name => $values) {
-        $ids = array_merge($ids, $values);
-      }
-      if (!empty($ids)) {
-        $wrapper = entity_metadata_wrapper($type, $entity);
-        $bundle = $wrapper->getBundle();
-        $eid = $wrapper->getIdentifier();
-        // Insert a record for this entity into the PostGIS entity table.
-        sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
-        // Update the records in PostGIS with the entity id.
-        sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('column' => 'id', 'value' => $ids)), array('eid' => $eid));
-      }
-    }
+function sync_postgis_entity_update($entity, $type) {
+  $wrapper = entity_metadata_wrapper($type, $entity);
+  $bundle = $wrapper->getBundle();
+  $eid = $wrapper->getIdentifier();
+  // Sync any other required fields to PostGIS.
+  $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type . '_' . $bundle, array()));
+  if (!empty($extra_fields)) {
+    sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields);
   }
 }
 
@@ -175,7 +190,6 @@ function sync_postgis_sync_geoms(&$entity, $eid, $entity_type, $bundle, $field_n
         $geom_fields['delta'] = $delta;
         $geom_fields[SYNC_PG_GEOMETRY_COLUMN] = $wkt;
         $geom_id = sync_postgis_insert(SYNC_PG_GEOMETRY_TABLE, $geom_fields);
-        dpm($geom_id);
       }
       else {
         $geom_id = $existing[$delta];
@@ -378,8 +392,8 @@ function sync_postgis_update($table, $conditions, $fields) {
         sync_postgis_update($table, $conditions, $fields);
       }
       // TODO: This is gross, find a better way of getting the correct WHERE clause.
-      if (count($conditions) == 1 && $conditions[0][0] == 'id') {
-        $connection->query("UPDATE {" . SYNC_PG_GEOMETRY_TABLE . "} SET " . SYNC_PG_GEOMETRY_COLUMN . " = GeomFromText('" . $geom . "', 4326)  WHERE id = :id", array(':id' => $conditions[0][1]));
+      if (count($conditions) == 1 && $conditions[0]['column'] == 'id') {
+        $connection->query("UPDATE {" . SYNC_PG_GEOMETRY_TABLE . "} SET " . SYNC_PG_GEOMETRY_COLUMN . " = GeomFromText('" . $geom . "', 4326)  WHERE id = :id", array(':id' => $conditions[0]['value']));
         return TRUE;
       }
     }
