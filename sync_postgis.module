@@ -443,6 +443,11 @@ function sync_postgis_db_field_types() {
       'not null' => TRUE,
       'default' => '',
     ),
+    'longtext' => array(
+      'type' => 'text',
+      'not null' => TRUE,
+      'default' => '',
+    ),
   );
   // Add integer field types for entity reference fields.
   $entity_info = entity_get_info();
