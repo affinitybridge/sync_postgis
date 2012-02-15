@@ -218,23 +218,51 @@ function sync_postgis_sync_geoms(&$entity, $eid, $entity_type, $bundle, $field_n
  */
 function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields) {
   $table_name = sync_postgis_table_name($type, $bundle);
-  $fields = array(
-    'eid' => $eid ? $eid : 0,
+  $schema = sync_postgis_get_bundle_schemas($type, $bundle);
+
+  $values = array();
+  foreach ($extra_fields as $field) {
+    $values[$field] = $wrapper->{$field}->raw();
+  }
+
+  sync_postgis_sync_data($eid, $type, $table_name, $schema, $values);
+}
+
+/**
+ * Save entity data to an entity-related table (keyed by EID & entity type).
+ * If no row exists, one is inserted.
+ * Otherwise row is updated.
+ *
+ * @param $table
+ *    Table name.
+ * @param $schema
+ *    The table schema, used for validation and setting default values.
+ * @param $values
+ *    Associative array containing data to save in column => value pairs.
+ */
+function sync_postgis_sync_data($eid, $type, $table, $schema, $values) {
+  // Ensure all values are valid.
+  foreach ($values as $field => &$value) {
+    if (is_null($value) && $schema['fields'][$field]['not null']) {
+      $value = $schema['fields'][$field]['default'];
+    }
+  }
+  // Ensure primary key is set.
+  $values += array(
+    'eid' => $eid,
     'entity_type' => $type,
   );
-  $schema = sync_postgis_get_bundle_schemas($type, $bundle);
-  foreach ($extra_fields as $field_name) {
-    $value = $wrapper->{$field_name}->raw();
-    if (is_null($value) && $schema['fields'][$field_name]['not null']) {
-      $value = $schema['fields'][$field_name]['default'];
-    }
-    $fields[$field_name] = $value;
+  // If no row exists yet, insert.
+  if (!sync_postgis_entity_exists($type, $eid, $table)) {
+    sync_postgis_insert($table, $values);
   }
-  if (!sync_postgis_entity_exists($type, $eid, $table_name)) {
-    sync_postgis_insert($table_name, $fields);
-  }
+  // Otherwise update.
   else {
-    sync_postgis_update($table_name, array(array('column' => 'eid', 'value' => $eid), array('column' => 'entity_type', 'value' => $type)), $fields);
+    $conditions = array(
+      array('column' => 'eid', 'value' => $eid),
+      array('column' => 'entity_type', 'value' => $type)
+    );
+    sync_postgis_update($table, $conditions, $data);
   }
 }
 
@@ -545,6 +573,27 @@ function sync_postgis_create_table($table_name, $schema) {
         $connection->query($sql);
         // Add a gist index for this geometry column.
         sync_postgis_add_index($table_name, $name, 'gist', $name);
+      }
+      catch (Exception $e) {
+        watchdog_exception('syncposgis', $e);
+      }
+    }
+  }
+}
+
+function sync_postgis_drop_table($table_name, $geoms = NULL) {
+  $connection = sync_postgis_get_postgis_connection();
+  try {
+    $connection->schema()->dropTable($table_name);
+  }
+  catch (Exception $e) {
+    watchdog_exception('syncposgis', $e);
+  }
+
+  if ($geoms) {
+    foreach ($geoms as $name => $settings) {
+      try {
+        // TODO: Figure out how geometry index columns/tables should be dropped.
       }
       catch (Exception $e) {
         watchdog_exception('syncposgis', $e);
