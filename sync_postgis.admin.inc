@@ -161,7 +161,6 @@ function sync_postgis_check_db_form_submit($form, &$form_state) {
  * Ensure we can connect to PostGIS and our table exists.
  */
 function sync_postgis_setup_tables_form($form, &$form_state) {
-  $schemas = sync_postgis_get_bundle_schemas();
 
   $form['description'] = array(
     '#type' => 'markup',
@@ -183,40 +182,37 @@ function sync_postgis_setup_tables_form_submit($form, &$form_state) {
   foreach ($schemas as $entity_type => $bundles) {
     foreach ($bundles as $bundle_name => $schema) {
       $table_name = sync_postgis_table_name($entity_type, $bundle_name);
-      // TODO: this should drop the table if it exists as the schema may have
-      // changed.
-      if (!$connection->schema()->tableExists($table_name)) {
-        $schema_base = array(
-          'fields' => array(
-            'eid' => array(
-              'description' => 'The id of the entity that this information belongs to.'
-            ) + $db_field_types['integer'],
-            'entity_type' => array(
-              'description' => 'The type of entity'
-            ) + $db_field_types['text'],
+      sync_postgis_drop_table($table_name);
+      $schema_base = array(
+        'fields' => array(
+          'eid' => array(
+            'description' => 'The id of the entity that this information belongs to.'
+          ) + $db_field_types['integer'],
+          'entity_type' => array(
+            'description' => 'The type of entity'
+          ) + $db_field_types['text'],
+        ),
+        // The eid + entity_type is a foreign key to the entity table but it is
+        // also the primary key. This arises from the fact that we're creating
+        // creating one-to-one table relationships. The only reason we're
+        // doing it like this is to keep the bundle-specific data in
+        // separate tables.
+        'primary key' => array('eid', 'entity_type'),
+        'foreign keys' => array(
+          'entity_id' => array(
+            'table' => 'entity',
+            'columns' => array('eid' => 'eid', 'entity_type' => 'entity_type'),
           ),
-          // The eid + entity_type is a foreign key to the entity table but it is
-          // also the primary key. This arises from the fact that we're creating
-          // creating one-to-one table relationships. The only reason we're
-          // doing it like this is to keep the bundle-specific data in
-          // separate tables.
-          'primary key' => array('eid', 'entity_type'),
-          'foreign keys' => array(
-            'entity_id' => array(
-              'table' => 'entity',
-              'columns' => array('eid' => 'eid', 'entity_type' => 'entity_type'),
-            ), 
-          ), 
-        );
-        $schema = array_merge_recursive($schema_base, $schema);
-        try {
-          sync_postgis_create_table($table_name, $schema);
-          drupal_set_message(t('Created table @table', array('@table' => $table_name)));
-        }
-        catch (Exception $e) {
-          drupal_set_message(t('Could not create table @table', array('@table' => $table_name)), 'error');
-          watchdog_exception('sync_postgis_tables', $e);
-        }
+        ),
+      );
+      $schema = array_merge_recursive($schema_base, $schema);
+      try {
+        sync_postgis_create_table($table_name, $schema);
+        drupal_set_message(t('Created table @table', array('@table' => $table_name)));
+      }
+      catch (Exception $e) {
+        drupal_set_message(t('Could not create table @table', array('@table' => $table_name)), 'error');
+        watchdog_exception('sync_postgis_tables', $e);
       }
     }
   }
