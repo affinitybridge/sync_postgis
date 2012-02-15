@@ -303,7 +303,35 @@ class syncPgQuery extends EntityFieldQuery {
     return $this;
   }
 
+  /**
+   * We only override the execute() method because the definition of the array
+   * we return is different.
+   *
+   * @return
+   *   The result set as an array of row objects.
+   */
+  public function execute() {
+    $result = parent::execute();
+    return $result;
+  }
+
+  /**
+   * Overrides the queryCallback method to ensure that only the syncPgQuery
+   * callback gets used.
+   */
   public function queryCallback() {
+    return array($this, 'syncPgQuery');
+  }
+
+  /**
+   * This is the only query callback that will ever get used for a syncPgQuery,
+   * unlike its parent class entityFieldQuery, which has multiple query callbacks
+   * that can be used, depending on what conditions have been added.
+   *
+   * @return
+   *   See syncPgQuery::execute().
+   */
+  public function syncPgQuery() {
     $base_table = $this->entity_table;
 
     // Initialise a select query on the entity table.
