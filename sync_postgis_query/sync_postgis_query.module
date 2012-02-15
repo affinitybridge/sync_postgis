@@ -12,9 +12,9 @@
  *     ->entityCondition('entity_type', 'node')
  *     ->entityCondition('bundle', 'road')
  *     ->fieldCondition('field_district', 'field_district', 740)
- *     ->addFields(array('field_road_status'))
- *     ->addGeometry()
  *     ->geometryCondition('within', $geom)
+ *     ->addBundleFields(array('field_road_status'))
+ *     ->addGeometry()
  *     ->getSql();
  * }
  * catch(Exception $e) {
