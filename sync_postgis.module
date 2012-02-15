@@ -705,9 +705,10 @@ function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
                //TODO: If it's a multivalue field, also store it as text - it will
                //just be a comma-separated list of values.
 
-              $field_def = array(
-                'description' => $entity_properties[$field]['description'],
-              );
+              $field_def = array();
+              if (isset($entity_properties[$field]['description'])) {
+                $field_def['description'] = $entity_properties[$field]['description'];
+              }
               $field_def += $db_field_types[$type];
               $schemas[$type_name][$bundle_name]['fields'][$field] = $field_def;
             }
