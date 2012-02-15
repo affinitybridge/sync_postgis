@@ -266,7 +266,7 @@ function sync_postgis_sync_data($eid, $type, $table, $schema, $values) {
       array('column' => 'eid', 'value' => $eid),
       array('column' => 'entity_type', 'value' => $type)
     );
-    sync_postgis_update($table, $conditions, $data);
+    sync_postgis_update($table, $conditions, $values);
   }
 }
 
