@@ -115,6 +115,18 @@ class syncPgQuery extends EntityFieldQuery {
   }
 
   /**
+   * Sets the srid to use in this query. Our geometry column uses 4326, so if
+   * anything else gets passed in here, we will use st_transform in our query
+   * to transform to the desired geometry.
+   *
+   * @param $srid
+   *   A string representing the SRID to use in the query, e.g. '900913'.
+   */
+  public function setSrid($srid) {
+    $this->srid = $srid;
+  }
+
+  /**
    * Returns the string of sql for the query, with all placeholders replaced by
    * the actual values.
    *
@@ -485,11 +497,6 @@ class syncPgQuery extends EntityFieldQuery {
     return $return;
   }
 
-  // Set the srid to use in this query. Our geometry column uses 4326, so if
-  // anything else gets passed in here, we will use st_transform in our query
-  // to transform to the desired geometry.
-  public function setSrid($srid) {
-    $this->srid = $srid;
-  }
+
 
 }
