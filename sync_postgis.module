@@ -233,6 +233,10 @@ function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields)
  * If no row exists, one is inserted.
  * Otherwise row is updated.
  *
+ * @param $eid
+ *    The entity id, used to create primary key.
+ * @param $type
+ *    The entity type, used to create primary key.
  * @param $table
  *    Table name.
  * @param $schema
