@@ -2,30 +2,106 @@
 
 class syncPgQuery extends EntityFieldQuery {
 
+  /**
+   * The database connection object to use for the query.
+   * 
+   * @var DatabaseConnection
+   */
   private $connection;
-  
+
+  /**
+   * The SRID to use for the query.
+   *
+   * @var string
+   */
   private $srid = '4326';
 
+  /**
+   * The name of the entity table to use in the query.
+   *
+   * @var string
+   */
   private $entity_table;
 
+  /**
+   * The name of the geometry table to use in the query.
+   *
+   * @var string
+   */
   private $geom_table;
 
+  /**
+   * The name of the geometry column to use in the query.
+   *
+   * @var string
+   */
   private $geom_column;
 
+  /**
+   * The method of execution of the query.
+   *
+   * We set this to 'print' if we don't actually want it to be executed but just
+   * returned as sql.
+   *
+   * @var string
+   */
   private $exec_method = 'execute';
 
-  private $query_type;
-
+  /**
+   * The entity type this query is concerned with, necessary for joining on a
+   * bundle-specific table.
+   *
+   * @var string
+   */
   private $entity_type;
 
+  /**
+   * The bundle this query is concerned with, necessary for joining on a
+   * bundle-specific table.
+   *
+   * @var string
+   */
   private $bundle;
 
+  /**
+   * The select query object.
+   *
+   * @var SelectQuery
+   */
   private $query;
 
+  /**
+   * The array of placeholders being used in the query.
+   *
+   * @var array
+   */
   private $placeholders;
 
+  /**
+   * The fields we want to return in the result set.
+   *
+   * @var array
+   */
   private $return_fields = array();
 
+  /**
+   * Constructor for a syngPgQuery.
+   *
+   * @param $connection
+   *   The DatabaseConnection object to use
+   *
+   * @param $srid
+   *   The SRID to use
+   *
+   * @param $entity_table
+   *   The name of the entity table in the database
+   *
+   * @param $geom_table
+   *   The name of the geometry table in the database
+   *
+   * @param $geom_column
+   *   The name of the geometry column in the database
+   */
   public function __construct(DatabaseConnection $connection, $srid = NULL, $entity_table = SYNC_PG_ENTITY_TABLE, $geom_table = SYNC_PG_GEOMETRY_TABLE, $geom_column = SYNC_PG_GEOMETRY_COLUMN) {
 
     $this->connection = $connection;
@@ -41,6 +117,9 @@ class syncPgQuery extends EntityFieldQuery {
   /**
    * Returns the string of sql for the query, with all placeholders replaced by
    * the actual values.
+   *
+   * @return string
+   *   A string version of the query.
    */
   public function getSql() {
 
@@ -87,8 +166,10 @@ class syncPgQuery extends EntityFieldQuery {
     return $querystring;
   }
 
-  // We overrride this because with our schema, entity conditions are no different
-  // than property conditions.
+  /**
+   * Overrride this because with our schema, entity conditions are no different
+   * from property conditions.
+   */
   public function entityCondition($name, $value, $operator = NULL) {
     $this->propertyConditions[] = array(
       'column' => $name,
@@ -117,6 +198,18 @@ class syncPgQuery extends EntityFieldQuery {
     return $this;
   }
 
+  /**
+   * Add a geometry-based condition to the query.
+   *
+   * @param $type
+   *   The type of condition, e.g. 'within', 'intersects'.
+   *
+   * @param $geom
+   *   A string of wkt representing the geometry to check against
+   *
+   * @return SyncPgQuery
+   *   The called object.
+   */
   public function geometryCondition($type, $geom) {
     $this->geometryConditions[] = array(
       'type' => $type,
@@ -153,6 +246,16 @@ class syncPgQuery extends EntityFieldQuery {
     return $this;
   }
 
+  /**
+   * Add entity properties to be returned from the query.
+   *
+   * @param $columns
+   *   An array of columns in the entity table whose values should be included
+   *   in the result set.
+   *
+   * @return SyncPgQuery
+   *   The called object.
+   */
   public function addProperties($columns = array()) {
     if (empty($columns)) {
       return $this;
@@ -165,7 +268,17 @@ class syncPgQuery extends EntityFieldQuery {
     return $this;
   }
 
-  public function addFields($fields = array()) {
+  /**
+   * Add bundle fields to be returned from the query.
+   *
+   * @param $fields
+   *   An array of columns in the bundle table whose values should be included
+   *   in the result set.
+   *
+   * @return SyncPgQuery
+   *   The called object.
+   */
+  public function addBundleFields($fields = array()) {
     if (empty($fields)) {
       return $this;
     }
@@ -177,6 +290,12 @@ class syncPgQuery extends EntityFieldQuery {
     return $this;
   }
 
+  /**
+   * Add the geometry to the set of fields to be returned from the query.
+   *
+   * @return SyncPgQuery
+   *   The called object.
+   */
   public function addGeometry() {
     if (!isset($this->return_fields['geometry'])) {
       $this->return_fields['geometry'] = array(SYNC_PG_GEOMETRY_COLUMN);
@@ -184,22 +303,7 @@ class syncPgQuery extends EntityFieldQuery {
     return $this;
   }
 
-  /**
-   * Determines the query callback to use for this entity query.
-   *
-   * @return
-   *   A callback that can be used with call_user_func().
-   */
   public function queryCallback() {
-    // Use the override from $this->executeCallback. It can be set either
-    // while building the query, or using hook_entity_query_alter().
-    if (function_exists($this->executeCallback)) {
-      return $this->executeCallback;
-    }
-    return array($this, 'propertyQuery');
-  }
-
-  public function propertyQuery() {
     $base_table = $this->entity_table;
 
     // Initialise a select query on the entity table.
@@ -305,8 +409,20 @@ class syncPgQuery extends EntityFieldQuery {
     return $this->finishQuery($select_query);
   }
 
+  /**
+   * Override this function because we only have one query callback that should
+   * ever be used.
+   */
+  public function propertyQuery() {
+    return $this->queryCallback();
+  }
+
+  /**
+   * Override this function because we only have one query callback that should
+   * ever be used.
+   */
   public function fieldQuery() {
-    return $this->propertyQuery();
+    return $this->queryCallback();
   }
 
   function finishQuery($select_query, $id_key = 'eid') {
@@ -324,11 +440,14 @@ class syncPgQuery extends EntityFieldQuery {
       return $select_query->countQuery()->execute()->fetchField();
     }
     $return = array();
+
+    // Execute of the query will either result in a result set being returned or
+    // in the $query property being set, depending on what the $exec_method is
+    // set to.
     if ($this->exec_method == 'execute') {
-      foreach ($select_query->execute() as $partial_entity) {
-        $bundle = isset($partial_entity->bundle) ? $partial_entity->bundle : NULL;
-        $return[$partial_entity->entity_type][$partial_entity->eid] = $partial_entity;
-        $this->ordered_results[] = $partial_entity;
+      foreach ($select_query->execute() as $row) {
+        $return[] = $row;
+        $this->ordered_results[] = $row;
       }
     }
     else {
