@@ -82,7 +82,7 @@ function sync_postgis_entity_presave($entity, $type) {
     $wrapper = entity_metadata_wrapper($type, $entity);
     $bundle = $wrapper->getBundle();
     $eid = entity_id($type, $entity);
-    $fields = sync_postgis_get_geofields($type, $bundle);
+    $fields = sync_postgis_syncd_geofields_by_bundle($type, $bundle);
 
     if (!empty($fields)) {
       if ($eid && !sync_postgis_entity_exists($type, $eid)) {
@@ -302,7 +302,7 @@ function sync_postgis_delete_entity($eid, $type) {
 /**
  * Gets and statically stores the list of geo fields per entity bundle.
  */
-function sync_postgis_get_geofields($entity_type, $bundle) {
+function sync_postgis_syncd_geofields_by_bundle($entity_type, $bundle) {
   $fields = &drupal_static(__FUNCTION__, array());
   if (isset($fields[$entity_type]) && isset($fields[$entity_type][$bundle])) {
     return $fields[$entity_type][$bundle];
@@ -686,7 +686,7 @@ function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
     if (!isset($schemas[$type_name]) || ($bundle && !isset($schemas[$type_name][$bundle]))) {
       $bundles = $bundle ? array($bundle) : array_keys($instances[$type_name]);
       foreach ($bundles as $bundle_name) {
-        $syncd = sync_postgis_get_geofields($type_name, $bundle_name);
+        $syncd = sync_postgis_syncd_geofields_by_bundle($type_name, $bundle_name);
         if (!empty($syncd)) {
           $wrapper = entity_metadata_wrapper($type_name, NULL, array('bundle' => $bundle_name));
           $entity_properties = $wrapper->getPropertyInfo();
