@@ -6,6 +6,12 @@
 function sync_postgis_admin_settings() {
   $instances = field_info_instances();
   $form = array();
+  $form['sync_postgis_transform_indexes'] = array(
+    '#type' => 'textfield',
+    '#title' => 'Commonly used SRIDs',
+    '#description' => t('Comma-separated list of SRIDs for which you wish to have an index in the database'),
+    '#default_value' => variable_get('sync_postgis_transform_indexes'),
+  );
   foreach ($instances as $entity_type => $bundles) {
     foreach ($bundles as $bundle_name => $fields) {
       $options = array();
@@ -44,79 +50,20 @@ function sync_postgis_admin_settings() {
 }
 
 /**
- * Bulk sync form.
- */
-function sync_postgis_bulk_sync($form, &$form_state) {
-  $form = array();
-  $form['bulk_sync'] = array(
-    '#type' => 'markup',
-    '#markup' => '<div>' . t('Clicking the button below will cause all exiting content with geofields configured for syncing to be syncd to the PostGIS db.') . '</div>',
-  );
-  $form['submit'] = array(
-    '#type' => 'submit',
-    '#value' => t('Sync all PostGis content'),
-  );
-  return $form;
-}
-
-/**
- * Bulk sync form.
- */
-function sync_postgis_bulk_sync_submit($form, &$form_state) {
-  $instances = field_info_instances();
-  $nodes = array();
-  $queue = DrupalQueue::get('sync_postgis_queue');
-  foreach ($instances as $entity_type => $bundles) {
-    foreach ($bundles as $bundle_name => $fields) {
-      $enabled = array_filter(variable_get('sync_pg_enabled_' . $entity_type . '_' . $bundle_name, array()));
-      if (!empty($enabled)) {
-        // Add all entities of this type for processing.
-        try {
-          $query = new EntityFieldQuery();
-          $entities = $query
-            ->entityCondition('entity_type', $entity_type)
-            ->entityCondition('bundle', $bundle_name)
-            ->execute();
-
-          $result = $entities[$entity_type];
-          foreach ($result as $eid => $obj) {
-            $item = array(
-              'entity_type' => $entity_type,
-              'bundle' => $bundle_name,
-              'eid' => $eid,
-            );
-            $queue->createItem($item);
-          }
-        }
-        catch (Exception $e) {
-          watchdog_exception('sync_postgis_bulk', $e);
-        }
-  
-      }
-    }
-  }
-  drupal_set_message(t('All relevant content has been queued for syncing to the PostGIS db.'));
-}
-
-/**
- * Set up PostGIS base tables and configure required st_transform indexes on the
- * geometry column.
- * TODO: figure out a better way to organize this stuff, i.e. without having two
- * submit buttons :-/
+ * Form for creating PostGIS base tables and any extra bundle tables as per the
+ * configuration at admin/config/system/sync-postgis.
  */
 function sync_postgis_check_db_form($form, &$form_state) {
-  $form['sync_postgis_transform_indexes'] = array(
-    '#type' => 'textfield',
-    '#title' => 'projections',
-    '#description' => t('Comma-separated list of SRIDs for which you wish to have a ST_Transform index on the geom column'),
-    '#default_value' => variable_get('sync_postgis_transform_indexes'),
+  $form = array();
+  $form['description'] = array(
+    '#type' => 'markup',
+    '#markup' => '<div>' . t('Clicking the button below will cause the base tables in PostGIS to be created if they do not exist yet, and any required bundle tables for extra field data to be recreated. You will need to re-sync your data after this.') . '</div>',
   );
   $form['create_table'] = array(
     '#type' => 'submit',
     '#value' => 'Ensure PostGIS tables and indexes exist',
-    '#submit' => array('sync_postgis_check_db_form_submit'),
   );
-  return system_settings_form($form);
+  return $form;
 }
 
 /**
@@ -124,6 +71,11 @@ function sync_postgis_check_db_form($form, &$form_state) {
  * plus any additional st_transform indexes on the geometry column.
  */
 function sync_postgis_check_db_form_submit($form, &$form_state) {
+  sync_postgis_ensure_base_tables();
+  sync_postgis_create_bundle_tables();
+}
+
+function sync_postgis_ensure_base_tables() {
   $schemas = sync_postgis_get_base_schemas();
   $connection = sync_postgis_get_postgis_connection();
   // Set up the entity and entity_geom tables.
@@ -147,37 +99,28 @@ function sync_postgis_check_db_form_submit($form, &$form_state) {
   if (!empty($srids)) {
     foreach ($srids as $srid) {
       $srid = trim($srid);
-      try {
-        sync_postgis_add_index('entity_geom', 'transform_' . $srid, 'gist', 'ST_Transform(geom, ' . $srid . ')');
-      }
-      catch (Exception $e) {
-        drupal_set_message($e->getMessage(), 'error');
+      if (!empty($srid)) { // Make sure it's not an empty string.
+        try {
+          sync_postgis_add_index('entity_geom', 'transform_' . $srid, 'gist', 'ST_Transform(geom, ' . $srid . ')');
+        }
+        catch (Exception $e) {
+          drupal_set_message($e->getMessage(), 'error');
+        }
       }
     }
   }
 }
 
 /**
- * Ensure we can connect to PostGIS and our table exists.
+ * Creates or recreates the bundle tables, based on the fields that have been
+ * selected for syncing at admin/config/settings/sync-postgis
  */
-function sync_postgis_setup_tables_form($form, &$form_state) {
-
-  $form['description'] = array(
-    '#type' => 'markup',
-    '#markup' => '<div>' . t('Clicking the button below will cause any non-existent tables to be created in PostGIS, as per the configuration settings for each bundle.') . '</div>',
-  );
-  $form['create_tables'] = array(
-    '#type' => 'submit',
-    '#value' => 'Create tables',
-  );
-  return $form;
-}
-
-function sync_postgis_setup_tables_form_submit($form, &$form_state) {
+function sync_postgis_create_bundle_tables() {
 
   $schemas = sync_postgis_get_bundle_schemas();
   $db_field_types = sync_postgis_db_field_types();
-  // Now create our postgis tables based on the schemas.
+  // Now create our PostgGIS tables based on the schemas. If a table already
+  // exists, it will be dropped and recreated.
   $connection = sync_postgis_get_postgis_connection();
   foreach ($schemas as $entity_type => $bundles) {
     foreach ($bundles as $bundle_name => $schema) {
@@ -216,4 +159,58 @@ function sync_postgis_setup_tables_form_submit($form, &$form_state) {
       }
     }
   }
+}
+
+/**
+ * Bulk sync form.
+ */
+function sync_postgis_bulk_sync($form, &$form_state) {
+  $form = array();
+  $form['bulk_sync'] = array(
+    '#type' => 'markup',
+    '#markup' => '<div>' . t('Clicking the button below will cause all exiting content with geofields configured for syncing to be syncd to the PostGIS db.') . '</div>',
+  );
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Sync all PostGis content'),
+  );
+  return $form;
+}
+
+/**
+ * Submit function for the bulk sync form.
+ */
+function sync_postgis_bulk_sync_submit($form, &$form_state) {
+  $instances = field_info_instances();
+  $nodes = array();
+  $queue = DrupalQueue::get('sync_postgis_queue');
+  foreach ($instances as $entity_type => $bundles) {
+    foreach ($bundles as $bundle_name => $fields) {
+      $enabled = array_filter(variable_get('sync_pg_enabled_' . $entity_type . '_' . $bundle_name, array()));
+      if (!empty($enabled)) {
+        // Add all entities of this type for processing.
+        try {
+          $query = new EntityFieldQuery();
+          $entities = $query
+            ->entityCondition('entity_type', $entity_type)
+            ->entityCondition('bundle', $bundle_name)
+            ->execute();
+
+          $result = $entities[$entity_type];
+          foreach ($result as $eid => $obj) {
+            $item = array(
+              'entity_type' => $entity_type,
+              'bundle' => $bundle_name,
+              'eid' => $eid,
+            );
+            $queue->createItem($item);
+          }
+        }
+        catch (Exception $e) {
+          watchdog_exception('sync_postgis_bulk', $e);
+        }
+      }
+    }
+  }
+  drupal_set_message(t('All relevant content has been queued for syncing to the PostGIS db.'));
 }

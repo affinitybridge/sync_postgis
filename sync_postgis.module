@@ -29,15 +29,6 @@ function sync_postgis_menu() {
     'type' => MENU_LOCAL_ACTION,
     'file' => 'sync_postgis.admin.inc',
   );
-  $items['admin/config/system/sync-postgis/tables'] = array(
-    'title' => 'Sync PostGis DB Tables',
-    'description' => 'Create extra tables for storing more node information.',
-    'page callback' => 'drupal_get_form',
-    'page arguments' => array('sync_postgis_setup_tables_form'),
-    'access arguments' => array('administer site configuration'),
-    'type' => MENU_LOCAL_ACTION,
-    'file' => 'sync_postgis.admin.inc',
-  );
   $items['admin/config/system/sync-postgis/bulk'] = array(
     'title' => 'Bulk sync content to PostGIS',
     'description' => 'Goes through all geofield data that has been configured to be syncd to PostGIS and syncs it all using a job queue.',
