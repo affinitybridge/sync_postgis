@@ -85,8 +85,9 @@ function sync_postgis_entity_presave($entity, $type) {
     $fields = sync_postgis_get_geofields($type, $bundle);
 
     if (!empty($fields)) {
-      // Add a row for this entity to the entity table in PostGIS.
       if ($eid && !sync_postgis_entity_exists($type, $eid)) {
+        // The entity already exists but doesn't yet have a corresponding row in
+        // the PostGIS db, so add it now.
         sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
       }
       // Sync geo fields to PostGIS.
