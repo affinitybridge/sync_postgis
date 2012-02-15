@@ -116,11 +116,11 @@ function sync_postgis_entity_insert($entity, $type) {
       if (!empty($ids)) {
         $wrapper = entity_metadata_wrapper($type, $entity);
         $bundle = $wrapper->getBundle();
-        $eid = entity_id($entity_type, $entity);
+        $eid = $wrapper->getIdentifier();
         // Insert a record for this entity into the PostGIS entity table.
         sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
-        // Update the records in PostGIS witht he entity id.
-        sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('id', $ids, 'IN')), array('eid' => $eid));
+        // Update the records in PostGIS with the entity id.
+        sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('column' => 'id', 'value' => $ids)), array('eid' => $eid));
       }
     }
   }
@@ -132,7 +132,7 @@ function sync_postgis_entity_insert($entity, $type) {
 function sync_postgis_entity_delete($entity, $type) {
   if (sync_postgis_test_db_connection()) {
     $wrapper = entity_metadata_wrapper($type, $entity);
-    $eid = entity_id($type, $entity);
+    $eid = $wrapper->getIdentifier();
     sync_postgis_delete_entity($eid, $type);
   }
 }
@@ -163,7 +163,7 @@ function sync_postgis_sync_geoms(&$entity, $eid, $entity_type, $bundle, $field_n
   if (!empty($field[$lang][0]['wkt'])) {
     // This array will be used when inserting the values into PostGIS.
     $geom_fields = array(
-      'eid' => $eid,
+      'eid' => $eid ? $eid : 0,
       'entity_type' => $entity_type,
       'field_name' => $field_name,
     );
@@ -175,10 +175,11 @@ function sync_postgis_sync_geoms(&$entity, $eid, $entity_type, $bundle, $field_n
         $geom_fields['delta'] = $delta;
         $geom_fields[SYNC_PG_GEOMETRY_COLUMN] = $wkt;
         $geom_id = sync_postgis_insert(SYNC_PG_GEOMETRY_TABLE, $geom_fields);
+        dpm($geom_id);
       }
       else {
         $geom_id = $existing[$delta];
-        sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('id', $geom_id)), array(SYNC_PG_GEOMETRY_COLUMN => $wkt));
+        sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('column' => 'id', 'value' => $geom_id)), array(SYNC_PG_GEOMETRY_COLUMN => $wkt));
       }
       if ($geom_id) {
         $entity->sync_postgis[$field_name][$delta] = $geom_id;
@@ -204,17 +205,22 @@ function sync_postgis_sync_geoms(&$entity, $eid, $entity_type, $bundle, $field_n
 function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields) {
   $table_name = sync_postgis_table_name($type, $bundle);
   $fields = array(
-    'eid' => $eid,
+    'eid' => $eid ? $eid : 0,
     'entity_type' => $type,
   );
+  $schema = sync_postgis_get_bundle_schemas($type, $bundle);
   foreach ($extra_fields as $field_name) {
-    $fields[$field_name] = $wrapper->{$field_name}->raw();
+    $value = $wrapper->{$field_name}->raw();
+    if (is_null($value) && $schema['fields'][$field_name]['not null']) {
+      $value = $schema['fields'][$field_name]['default'];
+    }
+    $fields[$field_name] = $value;
   }
   if (!sync_postgis_entity_exists($type, $eid, $table_name)) {
     sync_postgis_insert($table_name, $fields);
   }
   else {
-    sync_postgis_update($table_name, array(array('eid', $eid), array('entity_type' => $type)), $fields);
+    sync_postgis_update($table_name, array(array('column' => 'eid', 'value' => $eid), array('column' => 'entity_type', 'value' => $type)), $fields);
   }
 }
 
@@ -241,8 +247,8 @@ function sync_postgis_get_geoms_for_eid($eid, $entity_type, $field_name) {
 function sync_postgis_delete_entity($eid, $type) {
   // TODO: Figure out how to add "ON DELETE CASCADE" to tables with a foreign
   // key to the entity table.
-  sync_postgis_delete(SYNC_PG_GEOMETRY_TABLE, array(array('eid', $eid), array('entity_type', $type)));
-  sync_postgis_delete(SYNC_PG_ENTITY_TABLE, array(array('eid', $eid), array('entity_type', $type)));
+  sync_postgis_delete(SYNC_PG_GEOMETRY_TABLE, array(array('column' => 'eid', 'value' => $eid), array('column' => 'entity_type', 'value' => $type)));
+  sync_postgis_delete(SYNC_PG_ENTITY_TABLE, array(array('column' => 'eid', 'value' => $eid), array('column' => 'entity_type', 'value' => $type)));
   module_invoke_all('sync_postgis_entity_delete', $eid, $type);
 }
 
@@ -330,6 +336,7 @@ function sync_postgis_insert($table, $fields) {
       $insert_id = sync_postgis_insert($table, $fields);
       if ($insert_id) {
         $connection->query("UPDATE {" . SYNC_PG_GEOMETRY_TABLE . "} SET " . SYNC_PG_GEOMETRY_COLUMN . " = GeomFromText('" . $geom . "', 4326)  WHERE id = :id", array(':id' => $insert_id));
+        return $insert_id;
       }
     }
     catch (Exception $e) {
@@ -350,7 +357,10 @@ function sync_postgis_update($table, $conditions, $fields) {
     try {
       $query = $connection->update($table);
       foreach ($conditions as $condition) {
-        $query->condition($condition);
+        if (!isset($condition['operator'])) {
+          $condition['operator'] = is_array($condition['value']) ? 'IN' : '=';
+        }
+        $query->condition($condition['column'], $condition['value'], $condition['operator']);
       }
       $query->fields($fields)->execute();
       return TRUE;
@@ -389,7 +399,7 @@ function sync_postgis_delete($table, $conditions) {
   try {
      $query = $connection->delete($table);
      foreach ($conditions as $condition) {
-      $query->condition($condition);
+      $query->condition($condition['column'], $condition['value']);
      }
      $query->execute();
      return TRUE;
@@ -605,33 +615,33 @@ function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
     if (!isset($schemas[$type_name]) || ($bundle && !isset($schemas[$type_name][$bundle]))) {
       $bundles = $bundle ? array($bundle) : array_keys($instances[$type_name]);
       foreach ($bundles as $bundle_name) {
-  $syncd = sync_postgis_get_geofields($type_name, $bundle_name);
-  if (!empty($syncd)) {
-    $wrapper = entity_metadata_wrapper($type_name, NULL, array('bundle' => $bundle_name));
-    $entity_properties = $wrapper->getPropertyInfo();
-    $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type_name . '_' . $bundle_name, array()));
-    if (!empty($extra_fields)) {
-      $schemas[$type_name][$bundle_name] = array(
-        'description' => sprintf('Holds extra %s %s information', $bundle_name, $type_name),
-        'fields' => array()
-      );
-      
-      foreach ($extra_fields as $field) {
-        $type = $entity_properties[$field]['type'];
-        if (!isset($db_field_types[$type])) {
-    $type = 'text';
+        $syncd = sync_postgis_get_geofields($type_name, $bundle_name);
+        if (!empty($syncd)) {
+          $wrapper = entity_metadata_wrapper($type_name, NULL, array('bundle' => $bundle_name));
+          $entity_properties = $wrapper->getPropertyInfo();
+          $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type_name . '_' . $bundle_name, array()));
+          if (!empty($extra_fields)) {
+            $schemas[$type_name][$bundle_name] = array(
+              'description' => sprintf('Holds extra %s %s information', $bundle_name, $type_name),
+              'fields' => array()
+            );
+
+            foreach ($extra_fields as $field) {
+              $type = $entity_properties[$field]['type'];
+              if (!isset($db_field_types[$type])) {
+                $type = 'text';
+              }
+               //TODO: If it's a multivalue field, also store it as text - it will
+               //just be a comma-separated list of values.
+
+              $field_def = array(
+                'description' => $entity_properties[$field]['description'],
+              );
+              $field_def += $db_field_types[$type];
+              $schemas[$type_name][$bundle_name]['fields'][$field] = $field_def;
+            }
+          }
         }
-         //TODO: If it's a multivalue field, also store it as text - it will
-         //just be a comma-separated list of values.
-    
-        $field_def = array(
-    'description' => $entity_properties[$field]['description'],
-        );
-        $field_def += $db_field_types[$type];
-        $schemas[$type_name][$bundle_name]['fields'][$field] = $field_def;
-      }
-    }
-  }
       }
     }
   }

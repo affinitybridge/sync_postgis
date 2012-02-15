@@ -24,6 +24,8 @@ class syncPgQuery extends EntityFieldQuery {
 
   private $placeholders;
 
+  private $return_fields = array();
+
   public function __construct(DatabaseConnection $connection, $srid = NULL, $entity_table = SYNC_PG_ENTITY_TABLE, $geom_table = SYNC_PG_GEOMETRY_TABLE, $geom_column = SYNC_PG_GEOMETRY_COLUMN) {
 
     $this->connection = $connection;
@@ -151,18 +153,35 @@ class syncPgQuery extends EntityFieldQuery {
     return $this;
   }
 
+  public function addProperties($columns = array()) {
+    if (empty($columns)) {
+      return $this;
+    }
+
+    if (!isset($this->return_fields['entity_properties'])) {
+      $this->return_fields['entity_properties'] = array();
+    }
+    $this->return_fields['entity_properties'] += $columns;
+    return $this;
+  }
+
   public function addFields($fields = array()) {
     if (empty($fields)) {
       return $this;
     }
-    if (!isset($this->entity_type) || !isset($this->bundle)) {
-      throw new EntityFieldQueryException(t('For this query an entity type and bundle must be specified.'));
+
+    if (!isset($this->return_fields['bundle_fields'])) {
+      $this->return_fields['bundle_fields'] = array();
     }
-    // TODO: implement this!
+    $this->return_fields['bundle_fields'] += $fields;
+    return $this;
   }
 
   public function addGeometry() {
-    // TODO: implement this!
+    if (!isset($this->return_fields['geometry'])) {
+      $this->return_fields['geometry'] = array(SYNC_PG_GEOMETRY_COLUMN);
+    }
+    return $this;
   }
 
   /**
@@ -181,11 +200,11 @@ class syncPgQuery extends EntityFieldQuery {
   }
 
   public function propertyQuery() {
-    $schemas = sync_postgis_get_base_schemas();
     $base_table = $this->entity_table;
 
     // Initialise a select query on the entity table.
     $select_query = $this->connection->select($base_table);
+
     $placeholder_index = 0;
     // Process the property conditions.
     foreach ($this->propertyConditions as $condition) {
@@ -204,32 +223,51 @@ class syncPgQuery extends EntityFieldQuery {
           'field' => $condition['column'],
         );
       }
-      
     }
 
-    $select_query->fields($base_table, array('eid', 'entity_type', 'bundle'));
-
-    if (!empty($this->fieldConditions)) {
+    // Throw an error if we are trying to do anything bundle-specific in our
+    // query but don't have entity type and bundle specified.
+    if ((!empty($this->fieldConditions) || isset($this->return_fields['bundle_fields']))) {
       if (!isset($this->entity_type) || !isset($this->bundle)) {
         throw new EntityFieldQueryException(t('For this query an entity type and bundle must be specified.'));
       }
+      $bundle_table_name = sync_postgis_table_name($this->entity_type, $this->bundle);
+    }
 
+    if (empty($this->return_fields)) {
+      $select_query->fields($base_table, array('eid', 'entity_type', 'bundle'));
+    }
+    else {
+      $table_names = array(
+        'geometry' => SYNC_PG_GEOMETRY_TABLE,
+        'entity_properties' => SYNC_PG_ENTITY_TABLE,
+      );
+      if (isset($bundle_table_name)) {
+        $table_names['bundle_fields'] = $bundle_table_name;
+      }
+      foreach ($this->return_fields as $type => $fields) {
+        $table = $table_names[$type];
+        foreach ($fields as $field) {
+          $select_query->fields($table, $fields);
+        }
+      }
+    }
+
+    if (!empty($this->fieldConditions)) {
       // Join on the relevant bundle table.
-      $table_name = sync_postgis_table_name($this->entity_type, $this->bundle);
-      $table_alias = $table_name;
-      $select_query->join($table_name, $table_alias, "$table_alias.entity_type = entity.entity_type AND $table_alias.eid = entity.eid");
+      $select_query->join($bundle_table_name, $bundle_table_name, "$bundle_table_name.entity_type = entity.entity_type AND $bundle_table_name.eid = entity.eid");
   
       // Add field conditions.
       foreach ($this->fieldConditions as $key => $condition) {
         $field = $condition['field'];
         // Add the specified condition.
-        $sql_field = "$table_alias." . $field['field_name'];
+        $sql_field = "$bundle_table_name." . $field['field_name'];
         $this->addCondition($select_query, $sql_field, $condition);
         if (isset($condition['value'])) {
           $key = ':db_condition_placeholder_' . $placeholder_index++;
           // Add information about this field to the placeholders array.
           $this->placeholders[$key] = array(
-            'table' => $table_name,
+            'table' => $bundle_table_name,
             'field' => $field['field_name'],
           );
         }
@@ -237,10 +275,10 @@ class syncPgQuery extends EntityFieldQuery {
     }
 
     if (!empty($this->geometryConditions)) {
-      $select_query->join($this->geom_table, 'g', 'g.entity_type = entity.entity_type AND g.eid = entity.eid');
+      $select_query->join($this->geom_table, $this->geom_table, "{$this->geom_table}.entity_type = entity.entity_type AND {$this->geom_table}.eid = entity.eid");
       foreach ($this->geometryConditions as $i => $condition) {
         $placeholder_key = ':geom' . '_' . $i;
-        $select_query->where("St_{$condition['type']}(St_Transform(g.geom, {$this->srid}), St_GeomFromText($placeholder_key))", array($placeholder_key => $condition['value']));
+        $select_query->where("St_{$condition['type']}(St_Transform({$this->geom_table}.{$this->geom_column}, {$this->srid}), St_GeomFromText($placeholder_key))", array($placeholder_key => $condition['value']));
         if (isset($condition['value'])) {
           // Add information about this field to the placeholders array.
           $this->placeholders[$placeholder_key] = array(
