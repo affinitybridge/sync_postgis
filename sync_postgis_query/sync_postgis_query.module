@@ -1,8 +1,11 @@
 <?php
 
 /**
- * Sample client code:
- * 
+ * Sample client code for a normal select query. Select all nodes of type 'road'
+ * whose geometries are within the given polygon and whose field_district value
+ * is 740. Return the field_road_status value and the geometry value for all rows
+ * in the result set.
+ *
  * $connection = sync_postgis_get_postgis_connection();
  * $query = new syncPgQuery($connection, '900913');
  * $geom = 'POLYGON((-121.748434435966 54.4439949294269,-119.001852405208 54.4439949294269,-119.001852405208
@@ -20,5 +23,12 @@
  * catch(Exception $e) {
  *   watchdog_exception('sync_postgis_query', $e);
  * }
+ *
+ * Sample client code for a boolean relationship query. Queries whether or not
+ * the geometries of the two passed in entities intersect.
+ *
+ * $query = new syncPgQuery($connection, '900913');
+ * $intersects = $query->booleanRelQuery('intersects', array('eid' => 991, 'entity_type' => 'node'),
+ *    array('eid' => 992, 'entity_type' => 'node'));
  *
  */

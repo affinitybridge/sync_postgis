@@ -497,6 +497,68 @@ class syncPgQuery extends EntityFieldQuery {
     return $return;
   }
 
+  /**
+   * Performs a geometry relationship query on two entities. Each entity can
+   * either be passed in as an array with keys 'eid' and 'entity_type' or as an
+   * array of values corresponding to ids in the entity_geom table. The latter
+   * use case is for running a query on an entity during presave when it does
+   * not yet have an entity id but its geometries have been added to PostGIS.
+   *
+   * @param $type
+   *   The type of relationship to check for between the two entities, e.g.
+   *   'intersects', 'within'.
+   *
+   * @param $item1
+   *   The first item of the relationship, the syntax being e.g. "item1 intersects
+   *   item2".
+   *
+   * @param $item2
+   *   The second item of the relationship.
+   *
+   * @param distance
+   *   If this is a buffer query, the buffer distance to check.
+   *
+   * @return
+   *   TRUE if the two entities have the relationship in question, FALSE if not.
+   */
+  public function booleanRelQuery($type, $item1, $item2, $distance = NULL) {
+    // Initialise a select query on the geometry table...
+    $select_query = $this->connection->select($this->geom_table, 'a');
+    // ... CROSS JOIN'd with itself.
+    $select_query->addJoin('CROSS', $this->geom_table, 'b');
 
+    // Build a snippet for the relationship expression.
+    $snippet = "st_$type(a." . $this->geom_column . ", b." . $this->geom_column;
+    // Certain geometry relationship queries, such as ST_DWithin, have a third
+    // parameter, which is the buffer distance to check.
+    if (is_numeric($distance)) {
+      $snippet .= ", " . $distance;
+    }
+    $snippet .= ")";
+    $select_query->addExpression($snippet, 'relation');
+
+    // Set up the conditions. This will produce a WHERE clause like e.g.
+    // "WHERE a.eid = 5 AND a.entity_type = 'node' AND b.id IN (1,2,3)"
+    foreach (array('a' => 'item1', 'b' => 'item2') as $alias => $param) {
+      if (isset(${$param}['eid'])) {
+        $select_query->condition("$alias.eid", ${$param}['eid']);
+        $select_query->condition("$alias.entity_type", ${$param}['entity_type']);
+      }
+      else {
+        // We've been passed an array of ids for geoms that don't yet have their
+        // eid set.
+        $select_query->condition("$alias.id", ${$param}, 'IN');
+      }
+    }
+
+    // Execute the query and return TRUE if any of the entities' geometries
+    // intersect each other.
+    foreach ($select_query->execute() as $row) {
+      if ($row->relation == TRUE) {
+        return TRUE;
+      }
+    }
+    return FALSE;
+  }
 
 }
