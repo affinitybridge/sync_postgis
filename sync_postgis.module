@@ -146,10 +146,15 @@ function sync_postgis_entity_update($entity, $type) {
  * Implements hook_entity_delete().
  */
 function sync_postgis_entity_delete($entity, $type) {
-  if (sync_postgis_test_db_connection()) {
-    $wrapper = entity_metadata_wrapper($type, $entity);
-    $eid = $wrapper->getIdentifier();
-    sync_postgis_delete_entity($eid, $type);
+  $wrapper = entity_metadata_wrapper($type, $entity);
+  $fields = sync_postgis_syncd_geofields_by_bundle($type, $wrapper->getBundle());
+
+  if (!empty($fields)) {
+    // TODO: Determine whether this test should actually be done closer to where
+    // the db query takes place.
+    if (sync_postgis_test_db_connection()) {
+      sync_postgis_delete_entity($wrapper->getIdentifier(), $type);
+    }
   }
 }
 
