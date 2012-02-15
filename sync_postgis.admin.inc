@@ -130,7 +130,7 @@ function sync_postgis_check_db_form_submit($form, &$form_state) {
   foreach ($schemas as $table_name => $schema) {
     if (!$connection->schema()->tableExists($table_name)) {
       try {
-        sync_postis_create_table($table_name, $schema);
+        sync_postgis_create_table($table_name, $schema);
         drupal_set_message(t('Created table @table', array('@table' => $table_name)));
       }
       catch (Exception $e) {
@@ -210,7 +210,7 @@ function sync_postgis_setup_tables_form_submit($form, &$form_state) {
         );
         $schema = array_merge_recursive($schema_base, $schema);
         try {
-          sync_postis_create_table($table_name, $schema);
+          sync_postgis_create_table($table_name, $schema);
           drupal_set_message(t('Created table @table', array('@table' => $table_name)));
         }
         catch (Exception $e) {

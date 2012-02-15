@@ -493,7 +493,7 @@ function sync_postgis_get_base_schemas() {
 /**
  * Create a table in the sync_postgis database.
  */
-function sync_postis_create_table($table_name, $schema) {
+function sync_postgis_create_table($table_name, $schema) {
   $connection = sync_postgis_get_postgis_connection();
   $geoms = NULL;
   if (isset($schema['geometry columns'])) {
