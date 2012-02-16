@@ -93,6 +93,37 @@ function sync_postgis_queue_process_item($item) {
 }
 
 /**
+ * Gets the Postgres database schema defined by implementations of
+ * hook_sync_postgis_schemas(). Result is cached.
+ *
+ * @param $table
+ *    A specific table name.
+ * @reset
+ *    If true, static cache will be repopulated.
+ *
+ * @return Returns a list of all defined tables.
+ *         If $table is provided then only the matching schema definition is
+ *         returned. If there is no match function returns NULL.
+ */
+function sync_postgis_get_schema($table = NULL, $reset = FALSE) {
+  $schema = &drupal_static(__FUNCTION__, array());
+
+  if (empty($schema) || $reset) {
+    $schema = module_invoke_all('sync_postgis_schemas');
+
+    if (isset($table)) {
+      if (isset($schema[$table])) {
+        return $schema[$table];
+      } else {
+        return FALSE;
+      }
+    }
+  }
+
+  return $schema;
+}
+
+/**
  * Implements hook_sync_postgis_schemas().
  */
 function sync_postgis_sync_postgis_schemas() {
@@ -370,7 +401,7 @@ function sync_postgis_delete_entity($eid, $type) {
     'entity_type' => $type
   );
   // Find out which tables have a foreign key to the entity table.
-  $schemas = module_invoke_all('sync_postgis_schemas');
+  $schemas = sync_postgis_get_schema();
   foreach ($schemas as $table_name => $schema) {
     if (isset($schema['foreign keys'])) {
       foreach ($schema['foreign keys'] as $name => $definition) {
