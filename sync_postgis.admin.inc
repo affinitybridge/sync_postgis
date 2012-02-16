@@ -182,7 +182,6 @@ function sync_postgis_bulk_sync($form, &$form_state) {
  */
 function sync_postgis_bulk_sync_submit($form, &$form_state) {
   $instances = field_info_instances();
-  $nodes = array();
   $queue = DrupalQueue::get('sync_postgis_queue');
   foreach ($instances as $entity_type => $bundles) {
     foreach ($bundles as $bundle_name => $fields) {
