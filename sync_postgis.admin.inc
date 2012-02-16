@@ -126,6 +126,11 @@ function sync_postgis_create_bundle_tables() {
     foreach ($bundles as $bundle_name => $schema) {
       $table_name = sync_postgis_table_name($entity_type, $bundle_name);
       sync_postgis_drop_table($table_name);
+      // TODO: This schema definition biz should probably be consolidated with
+      //       sync_postgis_get_bundle_schemas() so that the schema's can be
+      //       referenced from wherever necessary. 
+      //       Might also then be worthwhile to turn it into a hook so that 
+      //       other sweet modules can also define postgres schemas :-)
       $schema_base = array(
         'fields' => array(
           'eid' => array(
