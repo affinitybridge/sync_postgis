@@ -269,7 +269,12 @@ function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields)
   $values['eid'] = $eid;
   $values['entity_type'] = $type;
 
-  sync_postgis_sync_data($table_name, $schema, $values);
+  try {
+    sync_postgis_sync_data($table_name, $schema, $values);
+  }
+  catch (PostGISInvalidPKException $e) {
+    watchdog_exception('sync_postgis', $e);
+  }
 }
 
 /**
@@ -283,15 +288,17 @@ function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields)
  *    The table schema, used for validation and setting default values.
  * @param $values
  *    Associative array containing data to save in column => value pairs.
+ *
+ * @throws PostGISInvalidPKException
+ *    When data in $values cannot be used to create a valid Primary key for
+ *    $table based on $schema.
  */
 function sync_postgis_sync_data($table, $schema, $values) {
   $conditions = array();
   // Ensure we have enough info to create a valid primary key.
   foreach ($schema['primary key'] as $column) {
     if (!isset($values[$column])) {
-      // TODO: Missing primary key values, can't go on. What's the best way to
-      //       handle this?.
-      throw new Exception();
+      throw new PostGISInvalidPKException();
     }
     $conditions[] = array(
       'column' => $column,
@@ -859,3 +866,8 @@ function sync_postgis_add_index($table, $name, $type = 'btree', $field_string) {
   $query .= $field_string . ')';
   $connection->query($query);
 }
+
+/**
+ * Exception thrown if database query has an invalid primary key.
+ */
+class PostGISInvalidPKException extends Exception { }
