@@ -116,9 +116,7 @@ function sync_postgis_ensure_base_tables() {
  * selected for syncing at admin/config/settings/sync-postgis
  */
 function sync_postgis_create_bundle_tables() {
-
   $schemas = sync_postgis_get_bundle_schemas();
-  $db_field_types = sync_postgis_db_field_types();
   // Now create our PostgGIS tables based on the schemas. If a table already
   // exists, it will be dropped and recreated.
   $connection = sync_postgis_get_postgis_connection();
