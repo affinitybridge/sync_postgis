@@ -241,7 +241,6 @@ function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields)
 function sync_postgis_sync_data($table, $schema, $values) {
   $conditions = array();
   // Ensure we have enough info to create a valid primary key.
-  debug($schema, 'schema');
   foreach ($schema['primary key'] as $column) {
     if (!isset($values[$column])) {
       // TODO: Missing primary key values, can't go on. What's the best way to
@@ -546,29 +545,66 @@ function sync_postgis_get_base_schemas() {
     SYNC_PG_ENTITY_TABLE => array(
       'description' => 'Holds the basic entity information for everything stored in the sync_postgis db',
       'fields' => array(
-      'entity_type' => array('description' => 'The entity type, e.g. node, taxonomy_term') + $db_field_types['text'],
-      'bundle' => array('description' => 'The bundle name') + $db_field_types['text'],
-      'eid' => array('description' => 'The entity id') + $db_field_types['integer'],
-      'label' => array('description' => 'The entity label') + $db_field_types['text'],
+        'entity_type' => array(
+          'description' => 'The entity type, e.g. node, taxonomy_term'
+        )
+        + $db_field_types['text'],
+        'bundle' => array(
+          'description' => 'The bundle name'
+        )
+        + $db_field_types['text'],
+        'eid' => array(
+          'description' => 'The entity id'
+        )
+        + $db_field_types['integer'],
+        'label' => array(
+          'description' => 'The entity label'
+        )
+        + $db_field_types['text'],
       ),
-      'primary key' => array('entity_type', 'eid'),
+      'primary key' => array(
+        'entity_type',
+        'eid'
+      ),
     ),
     SYNC_PG_GEOMETRY_TABLE => array(
       'description' => 'Holds the geometry information for entities',
       'fields' => array(
-      'id' => array('description' => 'Serial identifier for this table') + $db_field_types['serial'],
-      'entity_type' => array('description' => 'The entity type, e.g. node, taxonomy_term') + $db_field_types['text'],
-      'eid' => array('description' => 'The entity id') + $db_field_types['integer'],
-      'field_name' => array('description' => 'The name of this field in the Drupal db') + $db_field_types['text'],
-      'delta' => array('description' => 'The delta of this field value') + $db_field_types['integer'],
+        'id' => array(
+          'description' => 'Serial identifier for this table'
+        )
+        + $db_field_types['serial'],
+        'entity_type' => array(
+          'description' => 'The entity type, e.g. node, taxonomy_term'
+        )
+        + $db_field_types['text'],
+        'eid' => array(
+          'description' => 'The entity id'
+        )
+        + $db_field_types['integer'],
+        'field_name' => array(
+          'description' => 'The name of this field in the Drupal db'
+        )
+        + $db_field_types['text'],
+        'delta' => array(
+          'description' => 'The delta of this field value'
+        )
+        + $db_field_types['integer'],
       ),
+      'primary key' => array('id'),
       'foreign keys' => array(
           'entity_id' => array(
             'table' => SYNC_PG_ENTITY_TABLE,
             'columns' => array('entity_type' => 'entity_type', 'eid' => 'eid'),
           ),
       ),
-      'geometry columns' => array('geom' => array('srid' => 4326, 'type' => 'GEOMETRY', 'dimensions' => 2))
+      'geometry columns' => array(
+        'geom' => array(
+          'srid' => 4326,
+          'type' => 'GEOMETRY',
+          'dimensions' => 2
+        )
+      )
     )
   );
   return $schemas;
