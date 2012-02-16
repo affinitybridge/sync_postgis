@@ -62,8 +62,46 @@ function sync_postgis_requirements($phase) {
   return $requirements;
 }
 
-/******************************** Entity hooks *******************************/
+/**
+ * Implements hook_cron_queue_info().
+ */
+function sync_postgis_cron_queue_info() {
+  $queues['sync_postgis_queue'] = array(
+    'worker callback' => 'sync_postgis_queue_process_item',
+    'time' => 60,
+  );
+  return $queues;
+}
 
+/**
+ * Syncs a single queued item.
+ */
+function sync_postgis_queue_process_item($item) {
+  // Call whatever function will sync this item.
+  if (isset($item['eid']) && is_numeric($item['eid'])) {
+    // We just need to call entity_save on the entity in order to force it to get
+    // syncd to the PostGIS db.
+    $entity_type = $item['entity_type'];
+    if ($entity = entity_load_single($entity_type, $item['eid'])) {
+      entity_save($entity_type, $entity);
+      drupal_set_message(t('Processed %bundle %type %id', array('%bundle' => $item['bundle'], '%type' => $entity_type, '%id' => $item['eid'])));
+    }
+    else {
+      drupal_set_message(t('There was a problem with %bundle %type %id', array('%bundle' => $item['bundle'], '%type' => $entity_type, '%id' => $item['eid'])), 'error');
+    }
+  }
+}
+
+/**
+ * Implements hook_sync_postgis_schemas().
+ */
+function syng_postgis_sync_postgis_schemas() {
+  $schemas = sync_postgis_get_base_schemas();
+  $schemas += sync_postgis_get_bundle_schemas();
+  return $schemas;
+}
+
+/******************************** Entity hooks *******************************/
 
 /**
  * Implements hook_entity_presave().
@@ -477,7 +515,7 @@ function sync_postgis_delete($table, $conditions) {
   }
 }
 
-/**************** Helper functions ******************/
+/**************** Functions related to PostGIS db set-up ******************/
 
 function sync_postgis_table_name($type, $bundle) {
   return $type . '__' . $bundle;
@@ -486,7 +524,7 @@ function sync_postgis_table_name($type, $bundle) {
 /**
  * Returns an array of database field definition arrays.
  */
-function sync_postgis_db_field_types() {
+function sync_postgis_db_field_types($include_entity_ref_types = FALSE) {
   $types = array(
     'serial' => array(
       'type' => 'serial',
@@ -501,7 +539,8 @@ function sync_postgis_db_field_types() {
       'default' => 0,
     ),
     'date' => array(
-      
+      'type' => 'timestamp without time zone',
+      'not null' => FALSE,
     ),
     'integer' => array(
       'type' => 'int',
@@ -510,10 +549,8 @@ function sync_postgis_db_field_types() {
       'default' => 0,
     ),
     'float' => array(
-      
-    ),
-    'decimal' => array(
-      
+      'type' => 'float',
+      'not null' => FALSE,
     ),
     'text' => array(
       'type' => 'varchar',
@@ -527,11 +564,13 @@ function sync_postgis_db_field_types() {
       'default' => '',
     ),
   );
-  // Add integer field types for entity reference fields.
-  $entity_info = entity_get_info();
-  $entity_types = array_keys($entity_info);
-  foreach ($entity_types as $type) {
-    $types[$type] = $types['integer'];
+  if ($include_entity_ref_types) {
+    // Add integer field types for entity reference fields.
+    $entity_info = entity_get_info();
+    $entity_types = array_keys($entity_info);
+    foreach ($entity_types as $type) {
+      $types[$type] = $types['integer'];
+    }
   }
   return $types;
 }
@@ -611,117 +650,6 @@ function sync_postgis_get_base_schemas() {
 }
 
 /**
- * Create a table in the sync_postgis database.
- */
-function sync_postgis_create_table($table_name, $schema) {
-  $connection = sync_postgis_get_postgis_connection();
-  $geoms = NULL;
-  if (isset($schema['geometry columns'])) {
-    $geoms = $schema['geometry columns'];
-    unset($schema['geometry columns']);
-  }
-  try {
-    $connection->schema()->createTable($table_name, $schema);
-  }
-  catch (Exception $e) {
-    watchdog_exception('syncposgis', $e);
-  }
-
-  if ($geoms) {
-    $geom_defaults = array('srid' => 4326, 'type' => 'GEOMETRY', 'dimensions' => 2);
-    foreach ($geoms as $name => $settings) {
-      $settings += $geom_defaults;
-      $sql = "SELECT AddGeometryColumn('public', '" . $table_name ."', '" . $name . "', " . $settings['srid'] . ", '" . $settings['type'] . "', ". $settings['dimensions'] .");";
-      try {
-        $connection->query($sql);
-        // Add a gist index for this geometry column.
-        sync_postgis_add_index($table_name, $name, 'gist', $name);
-      }
-      catch (Exception $e) {
-        watchdog_exception('syncposgis', $e);
-      }
-    }
-  }
-}
-
-/**
- * Drop a table in the sync_postgis database.
- */
-function sync_postgis_drop_table($table_name, $geoms = NULL) {
-  $connection = sync_postgis_get_postgis_connection();
-  try {
-    $connection->schema()->dropTable($table_name);
-  }
-  catch (Exception $e) {
-    watchdog_exception('syncposgis', $e);
-  }
-
-  if ($geoms) {
-    foreach ($geoms as $name => $settings) {
-      try {
-        // TODO: Figure out how geometry index columns/tables should be dropped.
-      }
-      catch (Exception $e) {
-        watchdog_exception('syncposgis', $e);
-      }
-    }
-  }
-}
-
-/**
- * Add an index on a postgis table.
- */
-function sync_postgis_add_index($table, $name, $type = 'btree', $field_string) {
-  $connection = sync_postgis_get_postgis_connection();
-  $schema = $connection->schema();
-  
-  if (!$schema->tableExists($table)) {
-    throw new DatabaseSchemaObjectDoesNotExistException(t("Cannot add index %name to table %table: table doesn't exist.", array('%table' => $table, '%name' => $name)));
-  }
-  if ($schema->indexExists($table, $name)) {
-    throw new DatabaseSchemaObjectExistsException(t("Cannot add index %name to table %table: index already exists.", array('%table' => $table, '%name' => $name)));
-  }
-
-  $query = 'CREATE INDEX "' . $schema->prefixNonTable($table, $name, 'idx') . '" ON {' . $table . '}';
-  $query .= ' USING ' . $type;
-  $query .= '(';
-  $query .= $field_string . ')';
-  $connection->query($query);
-}
-
-/**
- * Implements hook_cron_queue_info().
- */
-function sync_postgis_cron_queue_info() {
-  $queues['sync_postgis_queue'] = array(
-    'worker callback' => 'sync_postgis_queue_process_item',
-    'time' => 60,
-  );
-  return $queues;
-}
-
-/**
- * Syncs a single queued item.
- */
-function sync_postgis_queue_process_item($item) {
-  // Call whatever function will sync this item.
-  if (isset($item['eid']) && is_numeric($item['eid'])) {
-    // We just need to call entity_save on the entity in order to force it to get
-    // syncd to the PostGIS db.
-    $entity_type = $item['entity_type'];
-    if ($entity = entity_load_single($entity_type, $item['eid'])) {
-      entity_save($entity_type, $entity);
-      drupal_set_message(t('Processed %bundle %type %id', array('%bundle' => $item['bundle'], '%type' => $entity_type, '%id' => $item['eid'])));
-    }
-    else {
-      drupal_set_message(t('There was a problem with %bundle %type %id', array('%bundle' => $item['bundle'], '%type' => $entity_type, '%id' => $item['eid'])), 'error');
-    }
-  }
-}
-
-
-
-/**
  * Get schema information for extra entity data to send to PostGIS. This is used
  * to create the tables in PostGIS.
  *
@@ -738,7 +666,7 @@ function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
   $instances = field_info_instances($entity_type, $bundle);
 
   $entity_types = $entity_type ? array($entity_type) : array_keys($instances);
-  $db_field_types = sync_postgis_db_field_types();
+  $db_field_types = sync_postgis_db_field_types(TRUE);
   // All of these tables will share some properties. Define a base schema to be
   // added to the bundle-specific schema in each case.
   $schema_base = array(
@@ -807,4 +735,83 @@ function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
   else {
     return $schemas;
   }
+}
+
+/**
+ * Create a table in the sync_postgis database.
+ */
+function sync_postgis_create_table($table_name, $schema) {
+  $connection = sync_postgis_get_postgis_connection();
+  $geoms = NULL;
+  if (isset($schema['geometry columns'])) {
+    $geoms = $schema['geometry columns'];
+    unset($schema['geometry columns']);
+  }
+  try {
+    $connection->schema()->createTable($table_name, $schema);
+  }
+  catch (Exception $e) {
+    watchdog_exception('syncposgis', $e);
+  }
+
+  if ($geoms) {
+    $geom_defaults = array('srid' => 4326, 'type' => 'GEOMETRY', 'dimensions' => 2);
+    foreach ($geoms as $name => $settings) {
+      $settings += $geom_defaults;
+      $sql = "SELECT AddGeometryColumn('public', '" . $table_name ."', '" . $name . "', " . $settings['srid'] . ", '" . $settings['type'] . "', ". $settings['dimensions'] .");";
+      try {
+        $connection->query($sql);
+        // Add a gist index for this geometry column.
+        sync_postgis_add_index($table_name, $name, 'gist', $name);
+      }
+      catch (Exception $e) {
+        watchdog_exception('syncposgis', $e);
+      }
+    }
+  }
+}
+
+/**
+ * Drop a table in the sync_postgis database.
+ */
+function sync_postgis_drop_table($table_name, $geoms = NULL) {
+  $connection = sync_postgis_get_postgis_connection();
+  try {
+    $connection->schema()->dropTable($table_name);
+  }
+  catch (Exception $e) {
+    watchdog_exception('syncposgis', $e);
+  }
+
+  if ($geoms) {
+    foreach ($geoms as $name => $settings) {
+      try {
+        // TODO: Figure out how geometry index columns/tables should be dropped.
+      }
+      catch (Exception $e) {
+        watchdog_exception('syncposgis', $e);
+      }
+    }
+  }
+}
+
+/**
+ * Add an index on a postgis table.
+ */
+function sync_postgis_add_index($table, $name, $type = 'btree', $field_string) {
+  $connection = sync_postgis_get_postgis_connection();
+  $schema = $connection->schema();
+
+  if (!$schema->tableExists($table)) {
+    throw new DatabaseSchemaObjectDoesNotExistException(t("Cannot add index %name to table %table: table doesn't exist.", array('%table' => $table, '%name' => $name)));
+  }
+  if ($schema->indexExists($table, $name)) {
+    throw new DatabaseSchemaObjectExistsException(t("Cannot add index %name to table %table: index already exists.", array('%table' => $table, '%name' => $name)));
+  }
+
+  $query = 'CREATE INDEX "' . $schema->prefixNonTable($table, $name, 'idx') . '" ON {' . $table . '}';
+  $query .= ' USING ' . $type;
+  $query .= '(';
+  $query .= $field_string . ')';
+  $connection->query($query);
 }
