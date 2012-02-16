@@ -76,7 +76,11 @@ function sync_postgis_entity_presave($entity, $type) {
     $fields = sync_postgis_syncd_geofields_by_bundle($type, $bundle);
 
     if (!empty($fields)) {
-      if ($eid && !sync_postgis_entity_exists($type, $eid)) {
+      $conditions = array(
+        array('column' => 'eid', 'value' => $eid),
+        array('column' => 'entity_type', 'value' => $type),
+      );
+      if ($eid && !sync_postgis_row_exists(SYNC_PG_ENTITY_TABLE, $conditions)) {
         // The entity already exists but doesn't yet have a corresponding row in
         // the PostGIS db, so add it now.
         sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
@@ -222,7 +226,11 @@ function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields)
     $values[$field] = $wrapper->{$field}->raw();
   }
 
-  sync_postgis_sync_data($eid, $type, $table_name, $schema, $values);
+  // Set primary key values.
+  $values['eid'] = $eid;
+  $values['entity_type'] = $type;
+
+  sync_postgis_sync_data($table_name, $schema, $values);
 }
 
 /**
@@ -230,10 +238,6 @@ function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields)
  * If no row exists, one is inserted.
  * Otherwise row is updated.
  *
- * @param $eid
- *    The entity id, used to create primary key.
- * @param $type
- *    The entity type, used to create primary key.
  * @param $table
  *    Table name.
  * @param $schema
@@ -241,28 +245,35 @@ function sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields)
  * @param $values
  *    Associative array containing data to save in column => value pairs.
  */
-function sync_postgis_sync_data($eid, $type, $table, $schema, $values) {
+function sync_postgis_sync_data($table, $schema, $values) {
+  $conditions = array();
+  // Ensure we have enough info to create a valid primary key.
+  debug($schema, 'schema');
+  foreach ($schema['primary key'] as $column) {
+    if (!isset($values[$column])) {
+      // TODO: Missing primary key values, can't go on. What's the best way to
+      //       handle this?.
+      throw new Exception();
+    }
+    $conditions[] = array(
+      'column' => $column,
+      'value' => $values[$column],
+    );
+  }
+
   // Ensure all values are valid.
   foreach ($values as $field => &$value) {
     if (is_null($value) && $schema['fields'][$field]['not null']) {
       $value = $schema['fields'][$field]['default'];
     }
   }
-  // Ensure primary key is set.
-  $values += array(
-    'eid' => $eid,
-    'entity_type' => $type,
-  );
+
   // If no row exists yet, insert.
-  if (!sync_postgis_entity_exists($type, $eid, $table)) {
+  if (!sync_postgis_row_exists($table, $conditions)) {
     sync_postgis_insert($table, $values);
   }
   // Otherwise update.
   else {
-    $conditions = array(
-      array('column' => 'eid', 'value' => $eid),
-      array('column' => 'entity_type', 'value' => $type)
-    );
     sync_postgis_update($table, $conditions, $values);
   }
 }
@@ -343,13 +354,16 @@ function sync_postgis_get_postgis_connection() {
  * @param $table The table to check, e.g. one of the specific bundle tables,
  *   defaults to the entity table.
  */
-function sync_postgis_entity_exists($entity_type, $eid, $table = SYNC_PG_ENTITY_TABLE) {
+function sync_postgis_row_exists($table, $conditions) {
   $connection = sync_postgis_get_postgis_connection();
   $select = $connection->select($table, 'e');
-  $result = $select->fields('e', array('eid'))
-    ->condition('e.eid', $eid)
-    ->condition('e.entity_type', $entity_type)
-    ->execute();
+  $select->fields('e', array('eid'));
+
+  foreach ($conditions as $condition) {
+    $select->condition("e.{$condition['column']}", $condition['value']);
+  }
+  $result = $select->execute();
+
   return $result->fetchField();
 }
 
