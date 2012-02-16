@@ -69,23 +69,21 @@ function sync_postgis_requirements($phase) {
  * Implements hook_entity_presave().
  */
 function sync_postgis_entity_presave($entity, $type) {
-  if (sync_postgis_test_db_connection()) {
-    $wrapper = entity_metadata_wrapper($type, $entity);
-    $bundle = $wrapper->getBundle();
-    $eid = entity_id($type, $entity);
-    $fields = sync_postgis_syncd_geofields_by_bundle($type, $bundle);
+  $wrapper = entity_metadata_wrapper($type, $entity);
+  $bundle = $wrapper->getBundle();
+  $eid = entity_id($type, $entity);
+  $fields = sync_postgis_syncd_geofields_by_bundle($type, $bundle);
 
-    if (!empty($fields)) {
-      if ($eid && !sync_postgis_entity_exists($type, $eid)) {
-        // The entity already exists but doesn't yet have a corresponding row in
-        // the PostGIS db, so add it now.
-        sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
-      }
-      // Sync geo fields to PostGIS.
-      $entity->sync_postgis = array();
-      foreach ($fields as $field_name) {
-        sync_postgis_sync_geoms($entity, $eid, $type, $bundle, $field_name);
-      }
+  if (!empty($fields)) {
+    if ($eid && !sync_postgis_entity_exists($type, $eid)) {
+      // The entity already exists but doesn't yet have a corresponding row in
+      // the PostGIS db, so add it now.
+      sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
+    }
+    // Sync geo fields to PostGIS.
+    $entity->sync_postgis = array();
+    foreach ($fields as $field_name) {
+      sync_postgis_sync_geoms($entity, $eid, $type, $bundle, $field_name);
     }
   }
 }
@@ -94,27 +92,24 @@ function sync_postgis_entity_presave($entity, $type) {
  * Implements hook_entity_insert().
  */
 function sync_postgis_entity_insert($entity, $type) {
-  if (sync_postgis_test_db_connection()) {
-    
-    if ($entity->sync_postgis && !empty($entity->sync_postgis)) {
-      $wrapper = entity_metadata_wrapper($type, $entity);
-      $bundle = $wrapper->getBundle();
-      $eid = $wrapper->getIdentifier();
-      $ids = array();
-      foreach($entity->sync_postgis as $field_name => $values) {
-        $ids = array_merge($ids, $values);
-      }
-      if (!empty($ids)) {
-        // Insert a record for this entity into the PostGIS entity table.
-        sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
-        // Update the records in PostGIS with the entity id.
-        sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('column' => 'id', 'value' => $ids)), array('eid' => $eid));
-      }
-      // Now sync any other required fields to PostGIS.
-      $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type . '_' . $bundle, array()));
-      if (!empty($extra_fields)) {
-        sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields);
-      }
+  if ($entity->sync_postgis && !empty($entity->sync_postgis)) {
+    $wrapper = entity_metadata_wrapper($type, $entity);
+    $bundle = $wrapper->getBundle();
+    $eid = $wrapper->getIdentifier();
+    $ids = array();
+    foreach($entity->sync_postgis as $field_name => $values) {
+      $ids = array_merge($ids, $values);
+    }
+    if (!empty($ids)) {
+      // Insert a record for this entity into the PostGIS entity table.
+      sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
+      // Update the records in PostGIS with the entity id.
+      sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('column' => 'id', 'value' => $ids)), array('eid' => $eid));
+    }
+    // Now sync any other required fields to PostGIS.
+    $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type . '_' . $bundle, array()));
+    if (!empty($extra_fields)) {
+      sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields);
     }
   }
 }
@@ -125,11 +120,13 @@ function sync_postgis_entity_insert($entity, $type) {
 function sync_postgis_entity_update($entity, $type) {
   $wrapper = entity_metadata_wrapper($type, $entity);
   $bundle = $wrapper->getBundle();
-  $eid = $wrapper->getIdentifier();
-  // Sync any other required fields to PostGIS.
-  $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type . '_' . $bundle, array()));
-  if (!empty($extra_fields)) {
-    sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields);
+  if (sync_postgis_is_syncable($type, $bundle)) {
+    $eid = $wrapper->getIdentifier();
+    // Sync any other required fields to PostGIS.
+    $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type . '_' . $bundle, array()));
+    if (!empty($extra_fields)) {
+      sync_postgis_sync_fields($wrapper, $eid, $type, $bundle, $extra_fields);
+    }
   }
 }
 
@@ -138,14 +135,9 @@ function sync_postgis_entity_update($entity, $type) {
  */
 function sync_postgis_entity_delete($entity, $type) {
   $wrapper = entity_metadata_wrapper($type, $entity);
-  $fields = sync_postgis_syncd_geofields_by_bundle($type, $wrapper->getBundle());
-
-  if (!empty($fields)) {
-    // TODO: Determine whether this test should actually be done closer to where
-    // the db query takes place.
-    if (sync_postgis_test_db_connection()) {
-      sync_postgis_delete_entity($wrapper->getIdentifier(), $type);
-    }
+  $bundle = $wrapper->getBundle();
+  if (sync_postgis_is_syncable($type, $bundle)) {
+    sync_postgis_delete_entity($wrapper->getIdentifier(), $type);
   }
 }
 
@@ -270,6 +262,23 @@ function sync_postgis_sync_data($eid, $type, $table, $schema, $values) {
 
 /********************* Entity-related helper functions ************************/
 
+/**
+ * Checks whether an entity is syncable to PostGIS.
+ *
+ * @param $entity_type
+ *   The entity type.
+ *
+ * @param $bundle
+ *   The bundle.
+ *
+ * @return TRUE if entities of the passed in type and bundle should be sync'd to
+ *  PostGIS, FALSE otherwise.
+ */
+function sync_postgis_is_syncable($entity_type, $bundle) {
+  $fields = sync_postgis_syncd_geofields_by_bundle($entity_type, $bundle);
+  return !empty($fields);
+}
+
 
 /**
  * Retrieves the geometries for a particular entity.
@@ -336,9 +345,11 @@ function sync_postgis_get_postgis_connection() {
 /**
  * Check if an entity exists in PostGIS.
  *
- * @param $entity_type The entity type.
+ * @param $entity_type
+ *   The entity type.
  *
- * @param $eid The entity id
+ * @param $eid
+ *   The entity id.
  *
  * @param $table The table to check, e.g. one of the specific bundle tables,
  *   defaults to the entity table.
