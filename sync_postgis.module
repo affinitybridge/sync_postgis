@@ -688,6 +688,30 @@ function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
 
   $entity_types = $entity_type ? array($entity_type) : array_keys($instances);
   $db_field_types = sync_postgis_db_field_types();
+  // All of these tables will share some properties. Define a base schema to be
+  // added to the bundle-specific schema in each case.
+  $schema_base = array(
+    'fields' => array(
+      'eid' => array(
+        'description' => 'The id of the entity that this information belongs to.'
+      ) + $db_field_types['integer'],
+      'entity_type' => array(
+        'description' => 'The type of entity'
+      ) + $db_field_types['text'],
+    ),
+    // The eid + entity_type is a foreign key to the entity table but it is
+    // also the primary key. This arises from the fact that we're creating
+    // creating one-to-one table relationships. The only reason we're
+    // doing it like this is to keep the bundle-specific data in
+    // separate tables.
+    'primary key' => array('eid', 'entity_type'),
+    'foreign keys' => array(
+      'entity_id' => array(
+        'table' => 'entity',
+        'columns' => array('eid' => 'eid', 'entity_type' => 'entity_type'),
+      ),
+    ),
+  );
 
   foreach ($entity_types as $type_name) {
     if (!isset($schemas[$type_name]) || ($bundle && !isset($schemas[$type_name][$bundle]))) {
@@ -699,7 +723,7 @@ function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
           $entity_properties = $wrapper->getPropertyInfo();
           $extra_fields = array_filter(variable_get('sync_pg_fields_' . $type_name . '_' . $bundle_name, array()));
           if (!empty($extra_fields)) {
-            $schemas[$type_name][$bundle_name] = array(
+            $schema = array(
               'description' => sprintf('Holds extra %s %s information', $bundle_name, $type_name),
               'fields' => array()
             );
@@ -717,8 +741,10 @@ function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
                 $field_def['description'] = $entity_properties[$field]['description'];
               }
               $field_def += $db_field_types[$type];
-              $schemas[$type_name][$bundle_name]['fields'][$field] = $field_def;
+              $schema['fields'][$field] = $field_def;
             }
+            $schema = array_merge_recursive($schema_base, $schema);
+            $schemas[$type_name][$bundle_name] = $schema;
           }
         }
       }
