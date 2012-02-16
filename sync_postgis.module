@@ -364,11 +364,9 @@ function sync_postgis_delete_entity($eid, $type) {
   );
   // Find out which tables have a foreign key to the entity table.
   $schemas = module_invoke_all('sync_postgis_schemas');
-  dpm($schemas);
   foreach ($schemas as $table_name => $schema) {
     if (isset($schema['foreign keys'])) {
       foreach ($schema['foreign keys'] as $name => $definition) {
-        dpm($definition);
         if ($definition['table'] == SYNC_PG_ENTITY_TABLE) {
           $conditions = array();
           // Match up the entity primary key values using the column names in
