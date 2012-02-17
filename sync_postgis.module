@@ -103,7 +103,7 @@ function sync_postgis_queue_process_item($item) {
  *
  * @return Returns a list of all defined tables.
  *         If $table is provided then only the matching schema definition is
- *         returned. If there is no match function returns NULL.
+ *         returned. If there is no match function returns FALSE.
  */
 function sync_postgis_get_schema($table = NULL, $reset = FALSE) {
   $schema = &drupal_static(__FUNCTION__, array());
@@ -120,7 +120,7 @@ function sync_postgis_get_schema($table = NULL, $reset = FALSE) {
     }
   }
 
-  return $schema;
+  return $table && isset($schema[$table]) ? $schema[$table] : $schema;
 }
 
 /**
@@ -403,22 +403,18 @@ function sync_postgis_delete_entity($eid, $type) {
   // Find out which tables have a foreign key to the entity table.
   $schemas = sync_postgis_get_schema();
   foreach ($schemas as $table_name => $schema) {
-    if (isset($schema['foreign keys'])) {
-      foreach ($schema['foreign keys'] as $name => $definition) {
-        if ($definition['table'] == SYNC_PG_ENTITY_TABLE) {
-          $conditions = array();
-          // Match up the entity primary key values using the column names in
-          // the other table, to create the correct array of conditions for the
-          // delete statement.
-          foreach ($definition['columns'] as $this_table_col => $entity_table_col) {
-            $conditions[] = array(
-              'column' => $this_table_col,
-              'value' => $entity_table_primary_key_values[$entity_table_col]
-              );
-          }
-          sync_postgis_delete($table_name, $conditions);
-        }
+    if ($foreign_key_cols = sync_pg_get_foreign_key_to_entity_table($schema)) {
+      $conditions = array();
+      // Match up the entity primary key values using the column names in
+      // the other table, to create the correct array of conditions for the
+      // delete statement.
+      foreach ($foreign_key_cols as $this_table_col => $entity_table_col) {
+        $conditions[] = array(
+          'column' => $this_table_col,
+          'value' => $entity_table_primary_key_values[$entity_table_col]
+          );
       }
+      sync_postgis_delete($table_name, $conditions);
     }
   }
   // Now we can delete the row from the entity table itself.
@@ -599,6 +595,9 @@ function sync_postgis_delete($table, $conditions) {
 
 /**************** Functions related to PostGIS db set-up ******************/
 
+/**
+ * Returns the table name to use for a given entity type and bundle.
+ */
 function sync_postgis_table_name($type, $bundle) {
   return $type . '__' . $bundle;
 }
@@ -817,6 +816,18 @@ function sync_postgis_get_bundle_schemas($entity_type = NULL, $bundle = NULL) {
   else {
     return $schemas;
   }
+}
+
+function sync_pg_get_foreign_key_to_entity_table($schema) {
+  if (!isset($schema['foreign keys'])) {
+    return FALSE;
+  }
+  foreach ($schema['foreign keys'] as $name => $definition) {
+    if ($definition['table'] == SYNC_PG_ENTITY_TABLE) {
+      return $definition['columns'];
+    }
+  }
+  return FALSE;
 }
 
 /**

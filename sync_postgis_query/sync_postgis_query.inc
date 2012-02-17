@@ -1,6 +1,6 @@
 <?php
 
-class syncPgQuery extends EntityFieldQuery {
+class syncPgQuery {
 
   /**
    * The database connection object to use for the query.
@@ -53,7 +53,7 @@ class syncPgQuery extends EntityFieldQuery {
    *
    * @var string
    */
-  private $entity_type;
+  private $entity_type = NULL;
 
   /**
    * The bundle this query is concerned with, necessary for joining on a
@@ -61,7 +61,7 @@ class syncPgQuery extends EntityFieldQuery {
    *
    * @var string
    */
-  private $bundle;
+  private $bundle = NULL;
 
   /**
    * The select query object.
@@ -78,11 +78,30 @@ class syncPgQuery extends EntityFieldQuery {
   private $placeholders;
 
   /**
+   * Holds the result set of the executed query.
+   */
+  private $ordererd_results;
+
+  /**
+   * Array of tables that have been joined to the query.
+   *
+   * @var array
+   */
+  private $joins = array();
+
+  /**
    * The fields we want to return in the result set.
    *
    * @var array
    */
   private $return_fields = array();
+
+  /**
+   * The filter conditions for the query.
+   *
+   * @var array
+   */
+  private $filterConditions = array();
 
   /**
    * Constructor for a syngPgQuery.
@@ -112,6 +131,8 @@ class syncPgQuery extends EntityFieldQuery {
     if ($srid) {
       $this->setSrid($srid);
     }
+    // Initialise a select query on the entity table.
+    $this->query = $this->connection->select($this->entity_table);
   }
 
   /**
@@ -124,6 +145,210 @@ class syncPgQuery extends EntityFieldQuery {
    */
   public function setSrid($srid) {
     $this->srid = $srid;
+  }
+
+  /**
+   * Returns the entity type being used in this query.
+   */
+  public function getEntityType() {
+    return $this->entity_type;
+  }
+
+  /**
+   * Returns the bundle being used in this query.
+   */
+  public function getBundle() {
+    return $this->bundle;
+  }
+
+  /**
+   * Sets the $entity_type and $bundle properties on the query object, allowing
+   * bundle tables to be used in the query.
+   */
+  public function filterByBundle($entity_type, $bundle) {
+    $this->entity_type = $entity_type;
+    $this->bundle = $bundle;
+    if (!isset($this->filterConditions['entity'])) {
+      $this->filterConditions['entity'] = array();
+    }
+    $this->filterConditions['entity'] += array(
+      array(
+        'column' => 'entity_type',
+        'value' => $entity_type,
+        'operator' => '=',
+      ),
+      array(
+        'column' => 'bundle',
+        'value' => $bundle,
+        'operator' => '=',
+      ),
+    );
+    return $this;
+  }
+
+  /**
+   * Add a condition to the query.
+   *
+   * @param $name
+   *   Usually the table name, unless it is a bundle table condition.
+   *
+   * @param $column
+   *   The column name.
+   *
+   * @param $value
+   *   The value to check for.
+   *
+   * @param $operator
+   *   The operator for the filter condition.
+   *
+   * @return SyncPgQuery
+   *   The called object.
+   */
+  public function filterCondition($name, $column, $value, $operator = '=') {
+    $this->filterConditions[$name][] = array(
+      'column' => $column,
+      'value' => $value,
+      'operator' => $operator,
+    );
+    return $this;
+  }
+
+  /**
+   * Add a geometry-based condition to the query.
+   *
+   * @param $type
+   *   The type of condition, e.g. 'within', 'intersects'.
+   *
+   * @param $geom
+   *   A string of wkt representing the geometry to check against
+   *
+   * @return SyncPgQuery
+   *   The called object.
+   */
+  public function geometryCondition($type, $geom) {
+    $this->geometryConditions[] = array(
+      'type' => $type,
+      'value' => $geom,
+    );
+    return $this;
+  }
+
+  /**
+   * Add fields to be returned from the query.
+   *
+   * @param $fields
+   *   An array of arrays of field names keyed by type, where type corresponds
+   *   to a class that is responsible for the table on which to join, whose
+   *   values should be included in the result set.
+   *
+   * @return SyncPgQuery
+   *   The called object.
+   */
+  public function addReturnFields($fields = array()) {
+    if (empty($fields)) {
+      return $this;
+    }
+    $this->return_fields = array_merge_recursive($this->return_fields, $fields);
+    return $this;
+  }
+
+  /**
+   * This is just a convenience method so that client code does not have to specify
+   * the name of the geometry table and geometry column.
+   */
+  public function returnGeometry() {
+    $this->return_fields['geometry'] = array(SYNC_PG_GEOMETRY_COLUMN);
+    return $this;
+  }
+
+  /**
+   * Execute the query.
+   *
+   * @return
+   *   The result set as an array of row objects.
+   */
+  public function execute() {
+    // Give a chance to other modules to alter the query.
+    drupal_alter('sync_pg_query', $this);
+    $this->altered = TRUE;
+
+    // Execute the query using the correct callback.
+    $result = $this->syncPgQuery();
+
+    return $result;
+  }
+
+  /**
+   * Builds the query.
+   *
+   * @return
+   *   See syncPgQuery::execute().
+   */
+  public function syncPgQuery() {
+
+    if (empty($this->return_fields)) {
+      // Nothing has been specified to be returned by the query, so just return
+      // eid, entity_type and bundle.
+      $this->query->fields($this->entity_table, array('eid', 'entity_type', 'bundle'));
+    }
+
+    foreach ($this->return_fields as $type => $fields) {
+      $table_info = $this->ensureTable($type);
+      $this->query->fields($table_info['table_name'], $fields);
+    }
+
+    $placeholder_index = 0;
+    foreach ($this->filterConditions as $type => $filters) {
+      $table_info = $this->ensureTable($type);
+      foreach ($filters as $condition) {
+        $field = $condition['column'];
+        $sql_field = "{$table_info['table_name']}." . $field;
+        $this->query->condition($sql_field, $condition['value'], $condition['operator']);
+        if (isset($condition['value'])) {
+          $ph_key = ':db_condition_placeholder_' . $placeholder_index++;
+          // Add information about this field to the placeholders array.
+          $this->placeholders[$ph_key] = array(
+            'table' => $table_info['table_name'],
+            'field' => $field,
+          );
+        }
+      }
+    }
+
+    if (!empty($this->geometryConditions)) {
+      // TODO: this is currently limited to geometry conditions of the form e.g.
+      // "ST_Within(geom1, geom2)" - need to make it more generic.
+      $table_info = $this->ensureTable('geometry');
+      foreach ($this->geometryConditions as $i => $condition) {
+        $placeholder_key = ':geom' . '_' . $i;
+        $this->query->where("St_{$condition['type']}(St_Transform({$this->geom_table}.{$this->geom_column}, {$this->srid}), St_GeomFromText($placeholder_key))", array($placeholder_key => $condition['value']));
+        if (isset($condition['value'])) {
+          // Add information about this field to the placeholders array.
+          $this->placeholders[$placeholder_key] = array(
+            'table' => $this->geom_table,
+            'field' => $this->geom_column,
+          );
+        }
+      }
+    }
+    // TODO: add ability to order the query.
+    return $this->finishQuery();
+  }
+
+  /**
+   * Finalises and executes the query.
+   */
+  function finishQuery() {
+    // TODO: add ability to do range queries and count queries.
+    $return = array();
+    // Only execute the query if $exec_method is set to 'execute'.
+    if ($this->exec_method == 'execute') {
+      foreach ($this->query->execute() as $row) {
+        $return[] = $row;
+        $this->ordered_results[] = $row;
+      }
+    }
+    return $return;
   }
 
   /**
@@ -171,330 +396,12 @@ class syncPgQuery extends EntityFieldQuery {
     // that protects against sql injection but there's no way around that if we
     // want to be able to print out the full sql without placeholders.
     $args = $this->query->getArguments();
+
     foreach ($args as $placeholder => $value) {
       $replacement = $arg_types[$placeholder] == 'd' ? $value : $this->connection->quote($value);
       $querystring = str_replace($placeholder, $replacement, $querystring);
     }
     return $querystring;
-  }
-
-  /**
-   * Overrride this because with our schema, entity conditions are no different
-   * from property conditions.
-   */
-  public function entityCondition($name, $value, $operator = NULL) {
-    $this->propertyConditions[] = array(
-      'column' => $name,
-      'value' => $value,
-      'operator' => $operator,
-    );
-    return $this;
-  }
-
-  public function fieldCondition($field, $column = NULL, $value = NULL, $operator = NULL, $delta_group = NULL, $language_group = NULL) {
-    if (is_scalar($field)) {
-      $field = array('field_name' => $field);
-    }
-    // Ensure the same index is used for fieldConditions as for fields.
-    $index = count($this->fields);
-    $this->fields[$index] = $field;
-    if (isset($column)) {
-      $this->fieldConditions[$index] = array(
-        'field' => $field,
-        'column' => $column,
-        'value' => $value,
-        'operator' => $operator,
-        'delta_group' => $delta_group,
-      );
-    }
-    return $this;
-  }
-
-  /**
-   * Add a geometry-based condition to the query.
-   *
-   * @param $type
-   *   The type of condition, e.g. 'within', 'intersects'.
-   *
-   * @param $geom
-   *   A string of wkt representing the geometry to check against
-   *
-   * @return SyncPgQuery
-   *   The called object.
-   */
-  public function geometryCondition($type, $geom) {
-    $this->geometryConditions[] = array(
-      'type' => $type,
-      'value' => $geom,
-    );
-    return $this;
-  }
-
-  public function entityOrderBy($name, $direction = 'ASC') {
-    $this->order[] = array(
-      'type' => 'property',
-      'specifier' => $name,
-      'direction' => $direction,
-    );
-    return $this;
-  }
-
-  public function fieldOrderBy($field, $column, $direction = 'ASC') {
-    if (is_scalar($field)) {
-      $field = array('field_name' => $field);
-    }
-    // Save the index used for the new field, for later use in field storage.
-    $index = count($this->fields);
-    $this->fields[$index] = $field;
-    $this->order[] = array(
-      'type' => 'field',
-      'specifier' => array(
-        'field' => $field,
-        'index' => $index,
-        'column' => $column,
-      ),
-      'direction' => $direction,
-    );
-    return $this;
-  }
-
-  /**
-   * Add entity properties to be returned from the query.
-   *
-   * @param $columns
-   *   An array of columns in the entity table whose values should be included
-   *   in the result set.
-   *
-   * @return SyncPgQuery
-   *   The called object.
-   */
-  public function addProperties($columns = array()) {
-    if (empty($columns)) {
-      return $this;
-    }
-
-    if (!isset($this->return_fields['entity_properties'])) {
-      $this->return_fields['entity_properties'] = array();
-    }
-    $this->return_fields['entity_properties'] += $columns;
-    return $this;
-  }
-
-  /**
-   * Add bundle fields to be returned from the query.
-   *
-   * @param $fields
-   *   An array of columns in the bundle table whose values should be included
-   *   in the result set.
-   *
-   * @return SyncPgQuery
-   *   The called object.
-   */
-  public function addBundleFields($fields = array()) {
-    if (empty($fields)) {
-      return $this;
-    }
-
-    if (!isset($this->return_fields['bundle_fields'])) {
-      $this->return_fields['bundle_fields'] = array();
-    }
-    $this->return_fields['bundle_fields'] += $fields;
-    return $this;
-  }
-
-  /**
-   * Add the geometry to the set of fields to be returned from the query.
-   *
-   * @return SyncPgQuery
-   *   The called object.
-   */
-  public function addGeometry() {
-    if (!isset($this->return_fields['geometry'])) {
-      $this->return_fields['geometry'] = array(SYNC_PG_GEOMETRY_COLUMN);
-    }
-    return $this;
-  }
-
-  /**
-   * We only override the execute() method because the definition of the array
-   * we return is different.
-   *
-   * @return
-   *   The result set as an array of row objects.
-   */
-  public function execute() {
-    $result = parent::execute();
-    return $result;
-  }
-
-  /**
-   * Overrides the queryCallback method to ensure that only the syncPgQuery
-   * callback gets used.
-   */
-  public function queryCallback() {
-    return array($this, 'syncPgQuery');
-  }
-
-  /**
-   * This is the only query callback that will ever get used for a syncPgQuery,
-   * unlike its parent class entityFieldQuery, which has multiple query callbacks
-   * that can be used, depending on what conditions have been added.
-   *
-   * @return
-   *   See syncPgQuery::execute().
-   */
-  public function syncPgQuery() {
-    $base_table = $this->entity_table;
-
-    // Initialise a select query on the entity table.
-    $select_query = $this->connection->select($base_table);
-
-    $placeholder_index = 0;
-    // Process the property conditions.
-    foreach ($this->propertyConditions as $condition) {
-      $this->addCondition($select_query, "$base_table." . $condition['column'], $condition);
-      if ($condition['column'] == 'entity_type') {
-        $this->entity_type = $condition['value'];
-      }
-      elseif ($condition['column'] == 'bundle') {
-        $this->bundle = $condition['value'];
-      }
-      if (isset($condition['value'])) {
-        // Add information about this field to the placeholders array.
-        $key = ':db_condition_placeholder_' . $placeholder_index++;
-        $this->placeholders[$key] = array(
-          'table' => $base_table,
-          'field' => $condition['column'],
-        );
-      }
-    }
-
-    // Throw an error if we are trying to do anything bundle-specific in our
-    // query but don't have entity type and bundle specified.
-    if ((!empty($this->fieldConditions) || isset($this->return_fields['bundle_fields']))) {
-      if (!isset($this->entity_type) || !isset($this->bundle)) {
-        throw new EntityFieldQueryException(t('For this query an entity type and bundle must be specified.'));
-      }
-      $bundle_table_name = sync_postgis_table_name($this->entity_type, $this->bundle);
-    }
-
-    if (empty($this->return_fields)) {
-      $select_query->fields($base_table, array('eid', 'entity_type', 'bundle'));
-    }
-    else {
-      $table_names = array(
-        'geometry' => SYNC_PG_GEOMETRY_TABLE,
-        'entity_properties' => SYNC_PG_ENTITY_TABLE,
-      );
-      if (isset($bundle_table_name)) {
-        $table_names['bundle_fields'] = $bundle_table_name;
-      }
-      foreach ($this->return_fields as $type => $fields) {
-        $table = $table_names[$type];
-        foreach ($fields as $field) {
-          $select_query->fields($table, $fields);
-        }
-      }
-    }
-
-    if (!empty($this->fieldConditions)) {
-      // Join on the relevant bundle table.
-      $select_query->join($bundle_table_name, $bundle_table_name, "$bundle_table_name.entity_type = entity.entity_type AND $bundle_table_name.eid = entity.eid");
-  
-      // Add field conditions.
-      foreach ($this->fieldConditions as $key => $condition) {
-        $field = $condition['field'];
-        // Add the specified condition.
-        $sql_field = "$bundle_table_name." . $field['field_name'];
-        $this->addCondition($select_query, $sql_field, $condition);
-        if (isset($condition['value'])) {
-          $key = ':db_condition_placeholder_' . $placeholder_index++;
-          // Add information about this field to the placeholders array.
-          $this->placeholders[$key] = array(
-            'table' => $bundle_table_name,
-            'field' => $field['field_name'],
-          );
-        }
-      }
-    }
-
-    if (!empty($this->geometryConditions)) {
-      $select_query->join($this->geom_table, $this->geom_table, "{$this->geom_table}.entity_type = entity.entity_type AND {$this->geom_table}.eid = entity.eid");
-      foreach ($this->geometryConditions as $i => $condition) {
-        $placeholder_key = ':geom' . '_' . $i;
-        $select_query->where("St_{$condition['type']}(St_Transform({$this->geom_table}.{$this->geom_column}, {$this->srid}), St_GeomFromText($placeholder_key))", array($placeholder_key => $condition['value']));
-        if (isset($condition['value'])) {
-          // Add information about this field to the placeholders array.
-          $this->placeholders[$placeholder_key] = array(
-            'table' => $this->geom_table,
-            'field' => $this->geom_column,
-          );
-        }
-      }
-    }
-
-    // Order the query.
-    foreach ($this->order as $order) {
-      if ($order['type'] == 'property') {
-        $select_query->orderBy("$base_table." . $order['specifier'], $order['direction']);
-      }
-      elseif ($order['type'] == 'field') {
-        $specifier = $order['specifier'];
-        $field = $specifier['field'];
-        $sql_field = "$table_alias." . $field['field_name'];
-        $select_query->orderBy($sql_field, $order['direction']);
-      }
-    }
-
-    return $this->finishQuery($select_query);
-  }
-
-  /**
-   * Override this function because we only have one query callback that should
-   * ever be used.
-   */
-  public function propertyQuery() {
-    return $this->queryCallback();
-  }
-
-  /**
-   * Override this function because we only have one query callback that should
-   * ever be used.
-   */
-  public function fieldQuery() {
-    return $this->queryCallback();
-  }
-
-  function finishQuery($select_query, $id_key = 'eid') {
-    foreach ($this->tags as $tag) {
-      $select_query->addTag($tag);
-    }
-    foreach ($this->metaData as $key => $object) {
-      $select_query->addMetaData($key, $object);
-    }
-    $select_query->addMetaData('entity_field_query', $this);
-    if ($this->range) {
-      $select_query->range($this->range['start'], $this->range['length']);
-    }
-    if ($this->count) {
-      return $select_query->countQuery()->execute()->fetchField();
-    }
-    $return = array();
-
-    // Execute of the query will either result in a result set being returned or
-    // in the $query property being set, depending on what the $exec_method is
-    // set to.
-    if ($this->exec_method == 'execute') {
-      foreach ($select_query->execute() as $row) {
-        $return[] = $row;
-        $this->ordered_results[] = $row;
-      }
-    }
-    else {
-      // Store the select query object so that it can be printed out as sql.
-      $this->query = $select_query;
-    }
-    return $return;
   }
 
   /**
@@ -561,4 +468,49 @@ class syncPgQuery extends EntityFieldQuery {
     return FALSE;
   }
 
+  /**
+   * Ensure that the table required for fields or filters is joined to the query.
+   *
+   * @param $name
+   *  Usually corresponds to the table name.
+   *
+   * @see sync_pg_query_get_queryables().
+   */
+  public function ensureTable($name) {
+    if (!isset($this->joins[$name])) {
+      // Get the relevant table info so we can do a table join, if needed.
+      $table_info = sync_pg_query_get_queryables($name);
+      
+      if (isset($table_info['callback'])) {
+        $table_info = call_user_func($table_info['callback'], $this);
+      }
+      // Store the table info in our joins array.
+      $this->joins[$name] = $table_info;
+
+      // This will only happen if it's the entity table.
+      if (empty($table_info['columns'])) {
+        return $table_info;
+      }
+
+      // Build up the string to pass as the join condition.
+      $condition = '';
+      $i = 0;
+      foreach ($table_info['columns'] as $this_table_col => $entity_table_col) {
+        if ($i) {
+          $condition .= ' AND ';
+        }
+        $condition .= "{$table_info['table_name']}.$this_table_col = {$this->entity_table}.$entity_table_col";
+        $i++;
+      }
+      // Add the join to our select query.
+      $this->query->join($table_info['table_name'], $table_info['table_name'], $condition);
+    }
+    return $this->joins[$name];
+  }
+
 }
+
+/**
+ * Exception thrown if invalid fields or filters are added to a query.
+ */
+class syncPgQueryException extends Exception {}
