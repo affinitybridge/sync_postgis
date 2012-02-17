@@ -7,19 +7,18 @@
  * in the result set.
  *
  * $connection = sync_postgis_get_postgis_connection();
- * $query = new syncPgQuery($connection, '900913');
  * $geom = 'POLYGON((-121.748434435966 54.4439949294269,-119.001852405208 54.4439949294269,-119.001852405208
  * 56.7703201938044,-121.748434435966 56.7703201938044,-121.748434435966 54.4439949294269))';
  * try {
- *   $sql = $query
- *     ->entityCondition('entity_type', 'node')
- *     ->entityCondition('bundle', 'road')
- *     ->fieldCondition('field_district', 'field_district', 740)
- *     ->filterCondition('geometry', 'within', $geom)
- *     ->addReturnFields(array('bundle' => 'field_road_status', 'geometry' => TRUE, 'my_other_return_field_type' => 'field_name'))
- *     ->addBundleFields(array('field_road_status'))
- *     ->addGeometry()
- *     ->getSql();
+ *    $query = new syncPgQuery($connection);
+ *    $sql = $query
+ *      ->filterByBundle('node', 'road')
+ *      ->filterCondition('bundle_field', 'field_district', $district)
+ *      ->filterCondition('view_mode', 'view_mode', 'full')
+ *      ->geometryCondition('within', $geom)
+ *      ->addReturnFields(array('bundle_field' => array('field_roadstatus'), 'view_mode' => array('markup')))
+ *      ->returnGeometry()
+ *      ->getSql();
  * }
  * catch(Exception $e) {
  *   watchdog_exception('sync_postgis_query', $e);
@@ -33,33 +32,6 @@
  *    array('eid' => 992, 'entity_type' => 'node'));
  *
  */
-
-/**
- * Implements hook_node_view(). FOR TESTING PURPOSES.
- */
-function sync_postgis_query_node_view($node) {
-  if ($node->type == 'hazard') {
-    $connection = sync_postgis_get_postgis_connection();
-    $district = 740;
-    $geom = 'POLYGON((-121.748434435966 54.4439949294269,-119.001852405208 54.4439949294269,-119.001852405208
-    56.7703201938044,-121.748434435966 56.7703201938044,-121.748434435966 54.4439949294269))';
-    try {
-      $query = new syncPgQuery($connection);
-      $sql = $query
-        ->filterByBundle('node', 'road')
-        ->filterCondition('bundle_field', 'field_district', $district)
-        //->filterCondition('view_mode', 'view_mode', 'full')
-        ->geometryCondition('within', $geom)
-        ->addReturnFields(array('bundle_field' => array('field_roadstatus')))
-        ->returnGeometry()
-        ->getSql();
-      dpm($sql);
-    }
-   catch(Exception $e) {
-     watchdog_exception('sync_postgis_query', $e);
-    }
-  }
-}
 
 /**
  * Gets information about how to join a table for a particular query field or
