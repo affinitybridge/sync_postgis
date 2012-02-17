@@ -174,7 +174,7 @@ function sync_postgis_entity_presave($entity, $type) {
  * Implements hook_entity_insert().
  */
 function sync_postgis_entity_insert($entity, $type) {
-  if ($entity->sync_postgis && !empty($entity->sync_postgis)) {
+  if (isset($entity->sync_postgis) && !empty($entity->sync_postgis)) {
     $wrapper = entity_metadata_wrapper($type, $entity);
     $bundle = $wrapper->getBundle();
     $eid = $wrapper->getIdentifier();
