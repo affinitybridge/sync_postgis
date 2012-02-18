@@ -593,6 +593,16 @@ function sync_postgis_delete($table, $conditions) {
   }
 }
 
+/**
+ * Perform a query on the PostGIS database, defined by a string of sql passed
+ * in.
+ */
+function sync_postgis_sql_query($sql, $args = array(), $options = array()) {
+  $connection = sync_postgis_get_postgis_connection();
+  $result = $connection->query($sql, $args, $options);
+  return $result;
+}
+
 /**************** Functions related to PostGIS db set-up ******************/
 
 /**
