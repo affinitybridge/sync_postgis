@@ -321,7 +321,7 @@ class syncPgQuery {
       $table_info = $this->ensureTable('geometry');
       foreach ($this->geometryConditions as $i => $condition) {
         $placeholder_key = ':geom' . '_' . $i;
-        $this->query->where("St_{$condition['type']}(St_Transform({$this->geom_table}.{$this->geom_column}, {$this->srid}), St_GeomFromText($placeholder_key))", array($placeholder_key => $condition['value']));
+        $this->query->where("St_{$condition['type']}(St_Transform({$this->geom_table}.{$this->geom_column}, {$this->srid}), St_SetSrid(St_GeomFromText($placeholder_key), {$this->srid}))", array($placeholder_key => $condition['value']));
         if (isset($condition['value'])) {
           // Add information about this field to the placeholders array.
           $this->placeholders[$placeholder_key] = array(
