@@ -38,6 +38,11 @@ class syncPgQuery {
   private $geom_column;
 
   /**
+   * The base table for the query.
+   */
+  private $base_table;
+
+  /**
    * The method of execution of the query.
    *
    * We set this to 'print' if we don't actually want it to be executed but just
@@ -78,9 +83,9 @@ class syncPgQuery {
   private $placeholders;
 
   /**
-   * Holds the result set of the executed query.
+   * Current placeholder index.
    */
-  private $ordererd_results;
+  private $placeholder_index = 0;
 
   /**
    * Array of tables that have been joined to the query.
@@ -102,6 +107,17 @@ class syncPgQuery {
    * @var array
    */
   private $filterConditions = array();
+
+  /**
+   * Stores whether the query has already been built, i.e. is ready to execute.
+   */
+  private $built = FALSE;
+
+  /**
+   * Store the name of a class that is used to return the results in the
+   * desired format.
+   */
+  private $return_strategy = 'syncPgRowReturn';
 
   /**
    * Constructor for a syngPgQuery.
@@ -131,8 +147,7 @@ class syncPgQuery {
     if ($srid) {
       $this->setSrid($srid);
     }
-    // Initialise a select query on the entity table.
-    $this->query = $this->connection->select($this->entity_table);
+
   }
 
   /**
@@ -271,11 +286,12 @@ class syncPgQuery {
     // Give a chance to other modules to alter the query.
     drupal_alter('sync_pg_query', $this);
     $this->altered = TRUE;
+    if (!($this->built)) {
+    // Build the query
+      $this->buildQuery();
+    }
 
-    // Execute the query using the correct callback.
-    $result = $this->syncPgQuery();
-
-    return $result;
+    return $this->finishQuery();
   }
 
   /**
@@ -284,12 +300,19 @@ class syncPgQuery {
    * @return
    *   See syncPgQuery::execute().
    */
-  public function syncPgQuery() {
+  public function buildQuery() {
+    if (is_null($this->base_table)) {
+      $this->base_table = $this->entity_table;
+    }
+    if (is_null($this->query)) {
+      // Initialise a select query on the base table.
+      $this->query = $this->connection->select($this->base_table);
+    }
 
     if (empty($this->return_fields)) {
       // Nothing has been specified to be returned by the query, so just return
       // eid, entity_type and bundle.
-      $this->query->fields($this->entity_table, array('eid', 'entity_type', 'bundle'));
+      $this->query->fields($this->base_table, array('eid', 'entity_type'));
     }
 
     foreach ($this->return_fields as $type => $fields) {
@@ -297,7 +320,6 @@ class syncPgQuery {
       $this->query->fields($table_info['table_name'], $fields);
     }
 
-    $placeholder_index = 0;
     foreach ($this->filterConditions as $type => $filters) {
       $table_info = $this->ensureTable($type);
       foreach ($filters as $condition) {
@@ -305,7 +327,7 @@ class syncPgQuery {
         $sql_field = "{$table_info['table_name']}." . $field;
         $this->query->condition($sql_field, $condition['value'], $condition['operator']);
         if (isset($condition['value'])) {
-          $ph_key = ':db_condition_placeholder_' . $placeholder_index++;
+          $ph_key = ':db_condition_placeholder_' . $this->placeholder_index++;
           // Add information about this field to the placeholders array.
           $this->placeholders[$ph_key] = array(
             'table' => $table_info['table_name'],
@@ -331,22 +353,20 @@ class syncPgQuery {
         }
       }
     }
+    $this->built = TRUE;
     // TODO: add ability to order the query.
-    return $this->finishQuery();
   }
 
   /**
    * Finalises and executes the query.
    */
   function finishQuery() {
-    // TODO: add ability to do range queries and count queries.
-    $return = array();
     // Only execute the query if $exec_method is set to 'execute'.
+    $return = NULL;
     if ($this->exec_method == 'execute') {
-      foreach ($this->query->execute() as $row) {
-        $return[] = $row;
-        $this->ordered_results[] = $row;
-      }
+      $result = $this->query->execute();
+      $strategy_class = $this->return_strategy;
+      $return = call_user_func_array(array($strategy_class, 'returnResult'), array($result, $this));
     }
     return $return;
   }
@@ -365,7 +385,6 @@ class syncPgQuery {
     // property, so that we can print it out.
     $this->exec_method = 'print';
     $this->execute();
-
     // The schemas for the tables involved in the query will let us know whether
     // each field contains numeric data or not.
     $schemas = sync_postgis_get_base_schemas();
@@ -442,7 +461,7 @@ class syncPgQuery {
       $snippet .= ", " . $distance;
     }
     $snippet .= ")";
-    $select_query->addExpression($snippet, 'relation');
+    $select_query->addExpression($snippet, 'booleanValue');
 
     // Set up the conditions. This will produce a WHERE clause like e.g.
     // "WHERE a.eid = 5 AND a.entity_type = 'node' AND b.id IN (1,2,3)"
@@ -457,15 +476,80 @@ class syncPgQuery {
         $select_query->condition("$alias.id", ${$param}, 'IN');
       }
     }
+    $this->built = TRUE; // Prevents the buildQuery() method from being called.
+    $this->query = $select_query;
+    $this->return_strategy = 'syncPgBooleanReturn';
+    return $this;
+  }
 
-    // Execute the query and return TRUE if any of the entities' geometries
-    // intersect each other.
-    foreach ($select_query->execute() as $row) {
-      if ($row->relation == TRUE) {
-        return TRUE;
-      }
+  /**
+   * Builds a query that finds all entities that have a particular geometry
+   * relationship with the entity whose type and id are passed in. An example
+   * query would look like this:
+   * "SELECT a.eid, a.entity_type FROM entity_geom a JOIN entity_geom b ON
+   * St_within(a.geom, b.geom) WHERE b.entity_type = 'node' and b.eid = 740"
+   *
+   * @param $type
+   *  The type of geometry function to use, e.g. 'within' for the ST_Within
+   *  function
+   *
+   * @param $entity_type
+   *  The type of entity we're checking against
+   *
+   * @param $eid
+   *  The entity id of the entity to check against.
+   *
+   * @param $reverse
+   *  If set to TRUE then the order of the geometries is reversed in the geometry
+   *  function being used.
+   *
+   * @param $distance
+   *  Used for example in buffer queries, the distance of the buffer to search,
+   *  passed in the units of the SRID being used for the query.
+   *
+   */
+  public function entityRelQuery($function_type, $entity_type, $eid, $reverse = FALSE, $distance = NULL) {
+    $this->base_table = $this->geom_table;
+    // Initialise a select query on the geometry table.
+    $select_query = $this->connection->select($this->geom_table, $this->geom_table);
+
+    $geoms = array($this->geom_table, 'geom_b');
+    if ($reverse) {
+      $geoms = array_reverse($geoms);
     }
-    return FALSE;
+    // Build up the geometry condition as a string of sql.
+    $func = sync_pg_query_get_function($function_type);
+    if (is_null($func)) {
+      throw new syncPgQueryException('Unrecognized PostGIS function type passed in');
+    }
+    $condition = "$func(ST_Transform({$geoms[0]}.{$this->geom_column}, {$this->srid}), ST_Transform({$geoms[1]}.{$this->geom_column}, {$this->srid})";
+    if (is_numeric($distance)) {
+      $condition .= ", $distance";
+    }
+    $condition .= ")";
+    // Join the table to itself based on the geometry condition.
+    $select_query->join($this->geom_table, 'geom_b', $condition);
+
+    // Add the conditions for the passed in entity
+    foreach (array('eid' => $eid, 'entity_type' => $entity_type) as $field_name => $value) {
+      $sql_field = "geom_b.$field_name";
+      $select_query->condition($sql_field, $value);
+      $ph_key = ':db_condition_placeholder_' . $this->placeholder_index++;
+      // Add information about this field to the placeholders array.
+      $this->placeholders[$ph_key] = array(
+        'table' => $this->geom_table,
+        'field' => $field_name,
+      );
+    }
+    // Add return fields
+    $this->return_fields = array(
+      'geometry' => array('eid', 'entity_type')
+    );
+    // Store the query and set the return strategy.
+    $this->query = $select_query;
+
+    $this->return_strategy = 'syncPgEntityReturn';
+    return $this;
   }
 
   /**
@@ -487,19 +571,19 @@ class syncPgQuery {
       // Store the table info in our joins array.
       $this->joins[$name] = $table_info;
 
-      // This will only happen if it's the entity table.
-      if (empty($table_info['columns'])) {
+      // No need to join if it's the base table
+      if ($table_info['table_name'] == $this->base_table) {
         return $table_info;
       }
 
       // Build up the string to pass as the join condition.
       $condition = '';
       $i = 0;
-      foreach ($table_info['columns'] as $this_table_col => $entity_table_col) {
+      foreach ($table_info['columns'] as $this_table_col => $base_table_col) {
         if ($i) {
           $condition .= ' AND ';
         }
-        $condition .= "{$table_info['table_name']}.$this_table_col = {$this->entity_table}.$entity_table_col";
+        $condition .= "{$table_info['table_name']}.$this_table_col = {$this->base_table}.$base_table_col";
         $i++;
       }
       // Add the join to our select query.
@@ -508,6 +592,94 @@ class syncPgQuery {
     return $this->joins[$name];
   }
 
+}
+
+/**
+ * Interface for return strategy classes.
+ */
+interface SyncPgReturnStrategy {
+  /**
+   * Returns the result in the desired format.
+   *
+   * @param $result
+   *  The query result as a DatabaseStatementBase object.
+   *
+   * @return either an array of results or a value, depending on the strategy
+   * used.
+   */
+  public static function returnResult(DatabaseStatementBase $result, syncPgQuery $query);
+}
+
+/**
+ * Class for returning the result as an array of row objects.
+ */
+class syncPgRowReturn implements SyncPgReturnStrategy {
+  public static function returnResult(DatabaseStatementBase $result, syncPgQuery $query) {
+    $return = array();
+    foreach ($result as $row) {
+      $return[] = $row;
+    }
+    return $return;
+  }
+}
+
+/**
+ * Class for returning the result as an array of stub entities keyed by entity
+ * type.
+ */
+class syncPgEntityReturn implements syncPgReturnStrategy {
+  public static function returnResult(DatabaseStatementBase $result, syncPgQuery $query) {
+    $return = array();
+    if ($entity_type = $query->getEntityType()) {
+      // This means we won't have to call entity_get_info() for each individual
+      // row.
+      $entity_type_info = entity_get_info($entity_type);
+    }
+    foreach ($result as $partial_entity) {
+      if (!isset($partial_entity->eid) || !isset($partial_entity->entity_type)) {
+        throw new syncPgQueryException('Entity type or entity id is missing from results');
+      }
+      $bundle = isset($partial_entity->bundle) ? $partial_entity->bundle : $query->getBundle();
+      // Build up a stub entity.
+      $entity = new stdClass();
+      $info = isset($entity_type_info) ? $entity_type_info : entity_get_info($partial_entity->entity_type);
+
+      $entity->{$info['entity keys']['id']} = $partial_entity->eid;
+      if (!empty($info['entity keys']['bundle']) && $bundle) {
+        $entity->{$info['entity keys']['bundle']} = $bundle;
+      }
+      if (!empty($info['entity keys']['label']) && isset($partial_entity->label)) {
+        $entity->{$info['entity keys']['label']} = $partial_entity->label;
+      }
+      $return[$partial_entity->entity_type][$partial_entity->eid] = $entity;
+    }
+    return $return;
+  }
+}
+
+/**
+ * Return strategy that simply returns TRUE or FALSE. When used on a
+ * booleanRelQuery, this will return TRUE if at least one row has a TRUE value
+ * for its booleanvalue field. Used on a query that does not return a boolean-
+ * value field, it returns TRUE as long as the result set contains at least one
+ * row.
+ */
+class syncPgBooleanReturn implements syncPgReturnStrategy {
+  public static function returnResult(DatabaseStatementBase $result, syncPgQuery $query) {
+    // Return TRUE if any of the rows' values is TRUE
+    foreach ($result as $row) {
+      if (!isset($row->booleanvalue)) {
+        // This may seem counter-intuitive, but if this return strategy is being
+        // used for a query that is not actually returning a booleanvalue, we
+        // just return true if it's returning at least one row.
+        return TRUE;
+      }
+      elseif ($row->booleanvalue) {
+        return TRUE;
+      }
+    }
+    return FALSE;
+  }
 }
 
 /**

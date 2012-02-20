@@ -29,7 +29,16 @@
  *
  * $query = new syncPgQuery($connection, '900913');
  * $intersects = $query->booleanRelQuery('intersects', array('eid' => 991, 'entity_type' => 'node'),
- *    array('eid' => 992, 'entity_type' => 'node'));
+ *    array('eid' => 992, 'entity_type' => 'node'))->execute();
+ *
+ * Sample client code for an entity relationship query, e.g. select all entities
+ * that have relationship x with entity y.
+ *
+ * $query = new syncPgQuery($connection, '900913');
+ * $entities = $query->entityRelQuery('intersects', 'node', 123)
+ *  ->filterByBundle('node', 'road')
+ *  ->addReturnFields(array('entity' => array('label')))
+ *  ->execute();
  *
  */
 
@@ -85,7 +94,7 @@ function sync_postgis_query_sync_pg_queryable() {
   $queryable = array(
     'entity' => array(
       'table_name' => SYNC_PG_ENTITY_TABLE,
-      'columns' => array()
+      'columns' => array('eid' => 'eid', 'entity_type' => 'entity_type')
     ),
     'geometry' => array(
       'table_name' => SYNC_PG_GEOMETRY_TABLE,
@@ -123,4 +132,23 @@ function sync_pg_query_bundle_callback($query) {
     'table_name' => $table_name,
     'columns' => sync_pg_get_foreign_key_to_entity_table(sync_postgis_get_schema($table_name))
   );
+}
+
+/**
+ * Returns the proper PostGis function name for the passed in function type.
+ *
+ * @param $function_type
+ *  string e.g. 'within', or 'intersects'
+ *
+ * @return
+ *  The actual PostGIS function, e.g. 'ST_Within', or 'ST_Intersects', or NULL
+ *  if there's no such function.
+ */
+function sync_pg_query_get_function($function_type) {
+  $types = array(
+    'within' => 'ST_Within',
+    'dwithin' => 'ST_DWithin',
+    'intersects' => 'ST_Intersects',
+  );
+  return isset($types[$function_type]) ? $types[$function_type] : NULL;
 }

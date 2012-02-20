@@ -157,10 +157,23 @@ function sync_postgis_entity_presave($entity, $type) {
       array('column' => 'eid', 'value' => $eid),
       array('column' => 'entity_type', 'value' => $type),
     );
-    if ($eid && !sync_postgis_row_exists(SYNC_PG_ENTITY_TABLE, $conditions)) {
-      // The entity already exists but doesn't yet have a corresponding row in
-      // the PostGIS db, so add it now.
-      sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
+    if ($eid) {
+      $label = entity_label($type, $entity);
+      if (!sync_postgis_row_exists(SYNC_PG_ENTITY_TABLE, $conditions)) {
+	// The entity already exists but doesn't yet have a corresponding row in
+	// the PostGIS db, so add it now.
+	$entity_fields = array(
+	  'entity_type' => $type,
+	  'bundle' => $bundle,
+	  'eid' => $eid,
+	  'label' => $label
+	);
+	sync_postgis_insert(SYNC_PG_ENTITY_TABLE, $entity_fields);
+      }
+      else {
+	// The label might have changed, so update the entity table record.
+	sync_postgis_update(SYNC_PG_ENTITY_TABLE, $conditions, array('label' => $label));
+      }
     }
     // Sync geo fields to PostGIS.
     $entity->sync_postgis = array();
@@ -184,7 +197,13 @@ function sync_postgis_entity_insert($entity, $type) {
     }
     if (!empty($ids)) {
       // Insert a record for this entity into the PostGIS entity table.
-      sync_postgis_insert(SYNC_PG_ENTITY_TABLE, array('entity_type' => $type, 'bundle' => $bundle, 'eid' => $eid));
+      $entity_fields = array(
+	'entity_type' => $type,
+	'bundle' => $bundle,
+	'eid' => $eid,
+	'label' => entity_label($type, $entity)
+      );
+      sync_postgis_insert(SYNC_PG_ENTITY_TABLE, $entity_fields);
       // Update the records in PostGIS with the entity id.
       sync_postgis_update(SYNC_PG_GEOMETRY_TABLE, array(array('column' => 'id', 'value' => $ids)), array('eid' => $eid));
     }
