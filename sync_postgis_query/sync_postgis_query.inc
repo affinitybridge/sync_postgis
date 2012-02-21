@@ -109,15 +109,32 @@ class syncPgQuery {
   private $filterConditions = array();
 
   /**
+   * The filter conditions for the query.
+   *
+   * @var array
+   */
+  private $geometryConditions = array();
+
+  /**
    * Stores whether the query has already been built, i.e. is ready to execute.
    */
   private $built = FALSE;
+
+  /**
+   * Stores whether the query has been executed.
+   */
+  private $executed = FALSE;
 
   /**
    * Store the name of a class that is used to return the results in the
    * desired format.
    */
   private $return_strategy = 'syncPgRowReturn';
+
+  /**
+   * Stores the actual result of the query.
+   */
+  private $result;
 
   /**
    * Constructor for a syngPgQuery.
@@ -290,7 +307,6 @@ class syncPgQuery {
     // Build the query
       $this->buildQuery();
     }
-
     return $this->finishQuery();
   }
 
@@ -363,12 +379,13 @@ class syncPgQuery {
   function finishQuery() {
     // Only execute the query if $exec_method is set to 'execute'.
     $return = NULL;
-    if ($this->exec_method == 'execute') {
+    if ($this->exec_method == 'execute' && !$this->executed) {
       $result = $this->query->execute();
       $strategy_class = $this->return_strategy;
-      $return = call_user_func_array(array($strategy_class, 'returnResult'), array($result, $this));
+      $this->result = call_user_func_array(array($strategy_class, 'returnResult'), array($result, $this));
+      $this->executed = TRUE;
     }
-    return $return;
+    return $this->result;
   }
 
   /**
@@ -590,6 +607,25 @@ class syncPgQuery {
       $this->query->join($table_info['table_name'], $table_info['table_name'], $condition);
     }
     return $this->joins[$name];
+  }
+
+  /**
+   * Resets everything back to defaults so that we can re-use this object for
+   * a new query.
+   */
+  public function destroy() {
+    $this->base_table = NULL;
+    $this->exec_method = 'execute';
+    $this->entity_type = $this->bundle = NULL;
+    if (isset($this->query)) {
+      unset($this->query);
+    }
+    $this->placeholders = array();
+    $this->placeholder_index = 0;
+    $this->joins = $this->return_fields = array();
+    $this->filterConditions = $this->geometryConditions = array();
+    $this->return_strategy = 'syncPgRowReturn';
+    $this->built = $this->executed = FALSE;
   }
 
 }

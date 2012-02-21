@@ -146,7 +146,6 @@ function sync_postgis_sync_postgis_schemas() {
  * Implements hook_entity_presave().
  */
 function sync_postgis_entity_presave($entity, $type) {
-
   $wrapper = entity_metadata_wrapper($type, $entity);
   $bundle = $wrapper->getBundle();
   $eid = entity_id($type, $entity);
