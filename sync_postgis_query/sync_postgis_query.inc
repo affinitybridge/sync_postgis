@@ -102,6 +102,12 @@ class syncPgQuery {
   private $return_fields = array();
 
   /**
+   * Set this to a format, e.g. 'AsText' or 'AsGeoJSON' to return the geometry
+   * in that format with the results.
+   */
+  private $return_geometry = NULL;
+
+  /**
    * The filter conditions for the query.
    *
    * @var array
@@ -288,8 +294,8 @@ class syncPgQuery {
    * This is just a convenience method so that client code does not have to specify
    * the name of the geometry table and geometry column.
    */
-  public function returnGeometry() {
-    $this->return_fields['geometry'] = array(SYNC_PG_GEOMETRY_COLUMN);
+  public function returnGeometry($format = 'AsText') {
+    $this->return_geometry = $format;
     return $this;
   }
 
@@ -336,6 +342,13 @@ class syncPgQuery {
       $this->query->fields($table_info['table_name'], $fields);
     }
 
+    if (isset($this->return_geometry)) {
+      $format = $this->return_geometry;
+      // Build a snippet for the geometry expression.
+      $expr = "st_$format(St_Transform({$this->geom_table}.{$this->geom_column}, {$this->srid}))";
+      $this->query->addExpression($expr, 'geom_' . $format);
+    }
+
     foreach ($this->filterConditions as $type => $filters) {
       $table_info = $this->ensureTable($type);
       foreach ($filters as $condition) {
@@ -358,15 +371,15 @@ class syncPgQuery {
       // "ST_Within(geom1, geom2)" - need to make it more generic.
       $table_info = $this->ensureTable('geometry');
       foreach ($this->geometryConditions as $i => $condition) {
-        $placeholder_key = ':geom' . '_' . $i;
-        $this->query->where("St_{$condition['type']}(St_Transform({$this->geom_table}.{$this->geom_column}, {$this->srid}), St_SetSrid(St_GeomFromText($placeholder_key), {$this->srid}))", array($placeholder_key => $condition['value']));
-        if (isset($condition['value'])) {
-          // Add information about this field to the placeholders array.
-          $this->placeholders[$placeholder_key] = array(
-            'table' => $this->geom_table,
-            'field' => $this->geom_column,
-          );
-        }
+        // A bit of nastiness here: we cannot use a placeholder for the geometry
+        // that's passed in because we have to allow for the passing in of an
+        // expression to be evaluated, not just a string of wkt. For example,
+        // for the geometry you might need to pass in
+        // "St_MakeEnvelope([some_wkt], 4326)", and this expression must not
+        // have quotes around it. Not sure if there's a better way to get around
+        // this, i.e. without throwing all the anti-sql-injection goodness out
+        // the window.
+        $this->query->where("St_{$condition['type']}(St_Transform({$this->geom_table}.{$this->geom_column}, {$this->srid}), St_SetSrid({$condition['value']}, {$this->srid}))");
       }
     }
     $this->built = TRUE;
@@ -616,7 +629,7 @@ class syncPgQuery {
   public function destroy() {
     $this->base_table = NULL;
     $this->exec_method = 'execute';
-    $this->entity_type = $this->bundle = NULL;
+    $this->entity_type = $this->bundle = $this->return_geometry = NULL;
     if (isset($this->query)) {
       unset($this->query);
     }
