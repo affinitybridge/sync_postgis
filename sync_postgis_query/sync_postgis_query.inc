@@ -466,10 +466,11 @@ class syncPgQuery {
    *
    * @param $item1
    *   The first item of the relationship, the syntax being e.g. "item1 intersects
-   *   item2".
+   *   item2". This should be an array that either has 'eid' and 'entity_type'
+   *   keys or is an indexed array of ids in the entity_geom table.
    *
    * @param $item2
-   *   The second item of the relationship.
+   *   The second item of the relationship. See $item1 above.
    *
    * @param distance
    *   If this is a buffer query, the buffer distance to check.
@@ -538,7 +539,7 @@ class syncPgQuery {
    *  passed in the units of the SRID being used for the query.
    *
    */
-  public function entityRelQuery($function_type, $entity_type, $eid, $reverse = FALSE, $distance = NULL) {
+  public function entityRelQuery($function_type, $item, $reverse = FALSE, $distance = NULL) {
     $this->base_table = $this->geom_table;
     // Initialise a select query on the geometry table.
     $select_query = $this->connection->select($this->geom_table, $this->geom_table);
@@ -560,17 +561,36 @@ class syncPgQuery {
     // Join the table to itself based on the geometry condition.
     $select_query->join($this->geom_table, 'geom_b', $condition);
 
-    // Add the conditions for the passed in entity
-    foreach (array('eid' => $eid, 'entity_type' => $entity_type) as $field_name => $value) {
-      $sql_field = "geom_b.$field_name";
-      $select_query->condition($sql_field, $value);
-      $ph_key = ':db_condition_placeholder_' . $this->placeholder_index++;
-      // Add information about this field to the placeholders array.
-      $this->placeholders[$ph_key] = array(
-        'table' => $this->geom_table,
-        'field' => $field_name,
-      );
+    // Set up the conditions. This will produce a WHERE clause like e.g.
+    // "WHERE geom_b.eid = 5 AND geom_b.entity_type = 'node'"
+    // ... if we've been passed an array describing an entity, or
+    // "WHERE geom_b.id IN (1,2,3)"
+    // ... if we've been passed an array of geometry ids.
+    if (isset($item['eid'])) {
+      foreach (array('eid' => $item['eid'], 'entity_type' => $item['entity_type']) as $field_name => $value) {
+        $sql_field = "geom_b.$field_name";
+        $select_query->condition($sql_field, $value);
+        $ph_key = ':db_condition_placeholder_' . $this->placeholder_index++;
+        // Add information about this field to the placeholders array.
+        $this->placeholders[$ph_key] = array(
+          'table' => $this->geom_table,
+          'field' => $field_name,
+        );
+      }
     }
+    else {
+      $select_query->condition("geom_b.id", $item, 'IN');
+      // Keep track of the placeholders.
+      foreach ($item as $i) {
+        $ph_key = ':db_condition_placeholder_' . $this->placeholder_index++;
+        // Add information about this field to the placeholders array.
+        $this->placeholders[$ph_key] = array(
+          'table' => $this->geom_table,
+          'field' => 'id',
+        );
+      }
+    }
+
     // Add return fields
     $this->return_fields = array(
       'geometry' => array('eid', 'entity_type')

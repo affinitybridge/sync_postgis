@@ -149,6 +149,7 @@ function sync_pg_query_get_function($function_type) {
     'within' => 'ST_Within',
     'dwithin' => 'ST_DWithin',
     'intersects' => 'ST_Intersects',
+    'contains' => 'ST_Contains'
   );
   return isset($types[$function_type]) ? $types[$function_type] : NULL;
 }
