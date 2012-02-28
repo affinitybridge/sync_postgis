@@ -90,6 +90,15 @@ function sync_postgis_queue_process_item($item) {
       drupal_set_message(t('There was a problem with %bundle %type %id', array('%bundle' => $item['bundle'], '%type' => $entity_type, '%id' => $item['eid'])), 'error');
     }
   }
+  elseif (isset($item['type']) && $item['type'] == 'vacuum_analyze') {
+    // After updating / inserting a whole bunch of data it's time to vacuum
+    // analyze the tables of our PostGIS database.
+    $schemas = sync_postgis_get_schema();
+    foreach (array_keys($schemas) as $table_name) {
+      $sql = "vacuum analyze $table_name";
+      sync_postgis_sql_query($sql);
+    }
+  }
 }
 
 /**

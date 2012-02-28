@@ -179,6 +179,12 @@ function sync_postgis_bulk_sync_submit($form, &$form_state) {
             );
             $queue->createItem($item);
           }
+          // Now schedule the vacuum analayze query to be run on the newly
+          // sync'd content
+          $item = array(
+            'type' => 'vacuum_analyze',
+          );
+          $queue->createItem($item);
         }
         catch (Exception $e) {
           watchdog_exception('sync_postgis_bulk', $e);
