@@ -1,0 +1,7 @@
+name = Sync Postgis Query
+description = Perform geospatial queries against your postgis database
+core = 7.x
+
+dependencies[] = sync_postgis
+
+files[] = sync_postgis_query.inc
