@@ -1,8 +1,7 @@
-Sync PostGIS for Drupal GeoField / OpenLayers
+Sync PostGIS for Drupal GeoField
 
-GeoField:   https://github.com/phayes/geofield
+GeoField:   http://drupal.org/project/geofield
 PostGIS:    http://postgis.refractions.net
-OpenLayers: http://drupal.org/project/openlayers
 
 This is for Drupal 7
 
