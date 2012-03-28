@@ -71,13 +71,16 @@ function sync_pg_query_get_queryables($name = NULL, $reset = FALSE) {
         // Assume the name is the same as the table name and the conditions can
         // be taken from the foreign key.
         $table_name = $name;
-        if ($schema = sync_postgis_get_schema($table_name) &&
-            $foreign_key_cols = sync_pg_get_foreign_key_to_entity_table($schema)) {
+        $schema = sync_postgis_get_schema($table_name);
+        if ($schema) {
+          $foreign_key_cols = sync_pg_get_foreign_key_to_entity_table($schema);
+          if ($foreign_key_cols) {
             $queryables[$name] = array(
               'table_name' => $table_name,
               'columns' => $foreign_key_cols
             );
             return $queryables[$name];
+          }
         }
         return FALSE;
       }

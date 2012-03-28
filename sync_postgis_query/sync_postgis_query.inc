@@ -343,10 +343,18 @@ class syncPgQuery {
     }
 
     if (isset($this->return_geometry)) {
+      $this->ensureTable('geometry');
+      $expr = "St_Transform({$this->geom_table}.{$this->geom_column}, {$this->srid})";
+
       $format = $this->return_geometry;
+      $alias = 'geom';
+      if ($format != 'raw') {
+        $expr = "st_$format($expr)";
+        $alias .= "_$format";
+      }
+
       // Build a snippet for the geometry expression.
-      $expr = "st_$format(St_Transform({$this->geom_table}.{$this->geom_column}, {$this->srid}))";
-      $this->query->addExpression($expr, 'geom_' . $format);
+      $this->query->addExpression($expr, $alias);
     }
 
     foreach ($this->filterConditions as $type => $filters) {

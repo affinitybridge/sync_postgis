@@ -116,20 +116,15 @@ function sync_postgis_queue_process_item($item) {
  */
 function sync_postgis_get_schema($table = NULL, $reset = FALSE) {
   $schema = &drupal_static(__FUNCTION__, array());
-
   if (empty($schema) || $reset) {
     $schema = module_invoke_all('sync_postgis_schemas');
-
-    if (isset($table)) {
-      if (isset($schema[$table])) {
-        return $schema[$table];
-      } else {
-        return FALSE;
-      }
-    }
   }
 
-  return $table && isset($schema[$table]) ? $schema[$table] : $schema;
+  if (isset($table)) {
+    return (isset($schema[$table])) ? $schema[$table] : FALSE;
+  }
+
+  return $schema;
 }
 
 /**
